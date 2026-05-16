@@ -93,7 +93,7 @@ export function ChannelMembersDialog({ channelId, open, onOpenChange }: ChannelM
                   <MemberListRow
                     key={m.member_id}
                     id={m.member_id}
-                    name={wsMember?.user.name ?? m.member_id.slice(0, 8)}
+                    name={wsMember?.name ?? m.member_id.slice(0, 8)}
                     actorType="member"
                     onRemove={() => removeMember.mutate({ channelId, memberId: m.member_id })}
                   />
