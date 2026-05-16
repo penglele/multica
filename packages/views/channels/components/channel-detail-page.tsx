@@ -21,6 +21,8 @@ import {
 import type { ChannelMessage } from "@multica/core/channels";
 import { ActorAvatar } from "../../common/actor-avatar";
 
+import { ChannelMembersDialog } from "./channel-members-dialog";
+
 // ---------------------------------------------------------------------------
 // ChannelDetailPage
 // ---------------------------------------------------------------------------
@@ -29,6 +31,7 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
   const wsId = useWorkspaceId();
   const user = useAuthStore((s) => s.user);
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const [membersOpen, setMembersOpen] = useState(false);
 
   const { data: channel } = useQuery(channelDetailOptions(wsId, channelId));
   const { data: messages = [] } = useQuery(channelMessagesOptions(channelId));
@@ -57,12 +60,15 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {/* Member count */}
-          <div className="flex items-center gap-1 text-xs text-muted-foreground px-2">
+          {/* Member count — click to open members dialog */}
+          <button
+            onClick={() => setMembersOpen(true)}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted transition-colors"
+          >
             <Users className="size-3.5" />
             <span>{members.length}</span>
-          </div>
-          {/* Auto-reply toggle (owner only) */}
+          </button>
+          {/* Auto-reply toggle */}
           <Button
             variant="ghost"
             size="sm"
@@ -76,9 +82,8 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
         </div>
       </PageHeader>
 
-      {/* Body: messages + optional thread panel */}
+      {/* Body */}
       <div className="flex flex-1 min-h-0">
-        {/* Main message area */}
         <div className="flex flex-col flex-1 min-w-0 min-h-0">
           <MessageFeed
             messages={messages}
@@ -93,8 +98,6 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
             disabled={sendMessage.isPending}
           />
         </div>
-
-        {/* Thread panel */}
         {openThreadId && (
           <ThreadPanel
             parentId={openThreadId}
@@ -104,6 +107,12 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
           />
         )}
       </div>
+
+      <ChannelMembersDialog
+        channelId={channelId}
+        open={membersOpen}
+        onOpenChange={setMembersOpen}
+      />
     </div>
   );
 }

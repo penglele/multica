@@ -45,6 +45,7 @@ import { StatusIcon } from "../issues/components/status-icon";
 import { useIssueDraftStore } from "@multica/core/issues/stores/draft-store";
 import { openCreateIssueWithPreference } from "@multica/core/issues/stores/create-mode-store";
 import { channelListOptions } from "@multica/core/channels";
+import { CreateChannelDialog } from "../channels/components/create-channel-dialog";
 import {
   Sidebar,
   SidebarContent,
@@ -748,62 +749,71 @@ function ChannelsSidebarSection({
     enabled: !!workspaceSlug,
   });
   const [collapsed, setCollapsed] = React.useState(false);
+  const [createOpen, setCreateOpen] = React.useState(false);
   const p = paths.workspace(workspaceSlug);
+  const { push } = useNavigation();
 
   return (
-    <SidebarGroup>
-      <div className="flex items-center justify-between px-2 h-[22px] mb-0.5">
-        <button
-          onClick={() => setCollapsed((v) => !v)}
-          className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {collapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
-          Channels
-          {channels.length > 0 && (
-            <span className="ml-1 text-[10px] text-muted-foreground">{channels.length}</span>
-          )}
-        </button>
-        <AppLink href={p.channels()}>
+    <>
+      <SidebarGroup>
+        <div className="flex items-center justify-between px-2 h-[22px] mb-0.5">
           <button
+            onClick={() => setCollapsed((v) => !v)}
+            className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {collapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
+            Channels
+            {channels.length > 0 && (
+              <span className="ml-1 text-[10px] text-muted-foreground">{channels.length}</span>
+            )}
+          </button>
+          <button
+            onClick={() => setCreateOpen(true)}
             className="rounded-md p-0.5 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground transition-colors"
             title="新建频道"
           >
             <Plus className="size-3.5" />
           </button>
-        </AppLink>
-      </div>
-      {!collapsed && (
-        <SidebarGroupContent>
-          <SidebarMenu className="gap-[2px]">
-            {channels.map((ch) => {
-              const href = p.channelDetail(ch.id);
-              const isActive = pathname === href;
-              return (
-                <SidebarMenuItem key={ch.id}>
-                  <SidebarMenuButton
-                    size="sm"
-                    isActive={isActive}
-                    render={<AppLink href={href} />}
-                    className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
-                  >
-                    {ch.type === "private" ? (
-                      <Lock className="size-3 shrink-0" />
-                    ) : (
-                      <Hash className="size-3 shrink-0" />
-                    )}
-                    <span className="truncate">{ch.name}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              );
-            })}
-            {channels.length === 0 && (
-              <div className="px-2 py-1 text-[11px] text-muted-foreground">
-                暂无频道
-              </div>
-            )}
-          </SidebarMenu>
-        </SidebarGroupContent>
-      )}
-    </SidebarGroup>
+        </div>
+        {!collapsed && (
+          <SidebarGroupContent>
+            <SidebarMenu className="gap-[2px]">
+              {channels.map((ch) => {
+                const href = p.channelDetail(ch.id);
+                const isActive = pathname === href;
+                return (
+                  <SidebarMenuItem key={ch.id}>
+                    <SidebarMenuButton
+                      size="sm"
+                      isActive={isActive}
+                      render={<AppLink href={href} />}
+                      className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                    >
+                      {ch.type === "private" ? (
+                        <Lock className="size-3 shrink-0" />
+                      ) : (
+                        <Hash className="size-3 shrink-0" />
+                      )}
+                      <span className="truncate">{ch.name}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+              {channels.length === 0 && (
+                <div className="px-2 py-1 text-[11px] text-muted-foreground">
+                  暂无频道
+                </div>
+              )}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        )}
+      </SidebarGroup>
+
+      <CreateChannelDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={(id) => push(p.channelDetail(id))}
+      />
+    </>
   );
 }
