@@ -40,7 +40,6 @@ export function MessageList({ messages, currentUserId, onThreadClick }: MessageL
             <ActorAvatar
               actorType={isAgent ? "agent" : "member"}
               actorId={msg.sender_id}
-              size="sm"
             />
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-2">
