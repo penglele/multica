@@ -34,7 +34,8 @@ import {
   X,
   Zap,
   Users,
-  MessageSquare,
+  Hash,
+  Lock,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
@@ -43,7 +44,7 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@multica/ui
 import { StatusIcon } from "../issues/components/status-icon";
 import { useIssueDraftStore } from "@multica/core/issues/stores/draft-store";
 import { openCreateIssueWithPreference } from "@multica/core/issues/stores/create-mode-store";
-import { useChannelStore } from "@multica/core/channels";
+import { channelListOptions } from "@multica/core/channels";
 import {
   Sidebar,
   SidebarContent,
@@ -695,7 +696,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             </SidebarGroupContent>
           </SidebarGroup>
 
-          <ChannelsSidebarButton />
+          <ChannelsSidebarSection workspaceSlug={workspace?.slug ?? ""} pathname={pathname} />
 
           <SidebarGroup>
             <SidebarGroupLabel>{t(($) => $.sidebar.configure_group)}</SidebarGroupLabel>
@@ -735,25 +736,74 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   );
 }
 
-function ChannelsSidebarButton() {
-  const toggle = useChannelStore((s) => s.toggle);
-  const isOpen = useChannelStore((s) => s.isOpen);
+function ChannelsSidebarSection({
+  workspaceSlug,
+  pathname,
+}: {
+  workspaceSlug: string;
+  pathname: string;
+}) {
+  const { data: channels = [] } = useQuery({
+    ...channelListOptions(workspaceSlug),
+    enabled: !!workspaceSlug,
+  });
+  const [collapsed, setCollapsed] = React.useState(false);
+  const p = paths.workspace(workspaceSlug);
+
   return (
     <SidebarGroup>
-      <SidebarGroupContent>
-        <SidebarMenu className="gap-0.5">
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              isActive={isOpen}
-              onClick={toggle}
-              className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground cursor-pointer"
-            >
-              <MessageSquare />
-              <span>频道</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarGroupContent>
+      <div className="flex items-center justify-between px-2 h-[22px] mb-0.5">
+        <button
+          onClick={() => setCollapsed((v) => !v)}
+          className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {collapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
+          Channels
+          {channels.length > 0 && (
+            <span className="ml-1 text-[10px] text-muted-foreground">{channels.length}</span>
+          )}
+        </button>
+        <AppLink href={p.channels()}>
+          <button
+            className="rounded-md p-0.5 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground transition-colors"
+            title="新建频道"
+          >
+            <Plus className="size-3.5" />
+          </button>
+        </AppLink>
+      </div>
+      {!collapsed && (
+        <SidebarGroupContent>
+          <SidebarMenu className="gap-[2px]">
+            {channels.map((ch) => {
+              const href = p.channelDetail(ch.id);
+              const isActive = pathname === href;
+              return (
+                <SidebarMenuItem key={ch.id}>
+                  <SidebarMenuButton
+                    size="sm"
+                    isActive={isActive}
+                    render={<AppLink href={href} />}
+                    className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                  >
+                    {ch.type === "private" ? (
+                      <Lock className="size-3 shrink-0" />
+                    ) : (
+                      <Hash className="size-3 shrink-0" />
+                    )}
+                    <span className="truncate">{ch.name}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
+            {channels.length === 0 && (
+              <div className="px-2 py-1 text-[11px] text-muted-foreground">
+                暂无频道
+              </div>
+            )}
+          </SidebarMenu>
+        </SidebarGroupContent>
+      )}
     </SidebarGroup>
   );
 }
