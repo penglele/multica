@@ -1732,6 +1732,11 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 			return util.UUIDToString(cs.WorkspaceID)
 		}
 	}
+	if task.ChannelID.Valid {
+		if ch, err := s.Queries.GetChannel(ctx, task.ChannelID); err == nil {
+			return util.UUIDToString(ch.WorkspaceID)
+		}
+	}
 	if task.AutopilotRunID.Valid {
 		if run, err := s.Queries.GetAutopilotRun(ctx, task.AutopilotRunID); err == nil {
 			if ap, err := s.Queries.GetAutopilot(ctx, run.AutopilotID); err == nil {
