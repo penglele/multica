@@ -208,13 +208,16 @@ WHERE id = (
             AND (
               (atq.issue_id IS NOT NULL AND active.issue_id = atq.issue_id)
               OR (atq.chat_session_id IS NOT NULL AND active.chat_session_id = atq.chat_session_id)
+              OR (atq.channel_id IS NOT NULL AND active.channel_id = atq.channel_id)
               OR (
                 atq.issue_id IS NULL
                 AND atq.chat_session_id IS NULL
                 AND atq.autopilot_run_id IS NULL
+                AND atq.channel_id IS NULL
                 AND active.issue_id IS NULL
                 AND active.chat_session_id IS NULL
                 AND active.autopilot_run_id IS NULL
+                AND active.channel_id IS NULL
               )
             )
       )
