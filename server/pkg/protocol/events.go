@@ -120,4 +120,12 @@ const (
 	EventPullRequestLinked         = "pull_request:linked"
 	EventPullRequestUpdated        = "pull_request:updated"
 	EventPullRequestUnlinked       = "pull_request:unlinked"
+
+	// Channel chat events
+	EventChannelCreated     = "channel:created"
+	EventChannelUpdated     = "channel:updated"
+	EventChannelDeleted     = "channel:deleted"
+	EventChannelMessage     = "channel:message"
+	EventChannelMemberJoin  = "channel:member_join"
+	EventChannelMemberLeave = "channel:member_leave"
 )

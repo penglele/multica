@@ -16,6 +16,8 @@ type scopeAuthQuerier interface {
 	GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentTaskQueue, error)
 	GetIssue(ctx context.Context, id pgtype.UUID) (db.Issue, error)
 	GetChatSession(ctx context.Context, id pgtype.UUID) (db.ChatSession, error)
+	GetChannelMember(ctx context.Context, arg db.GetChannelMemberParams) (db.ChannelMember, error)
+	GetChannelInWorkspace(ctx context.Context, arg db.GetChannelInWorkspaceParams) (db.Channel, error)
 }
 
 // dbScopeAuthorizer implements realtime.ScopeAuthorizer for the per-task and
@@ -90,6 +92,29 @@ func (a *dbScopeAuthorizer) AuthorizeScope(ctx context.Context, userID, workspac
 			return false, nil
 		}
 		return true, nil
+	case realtime.ScopeChannel:
+		// Channel scope: any workspace member who is a channel member may subscribe.
+		ch, err := a.q.GetChannelInWorkspace(ctx, db.GetChannelInWorkspaceParams{
+			ID:          idUUID,
+			WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			return false, nil
+		}
+		// Public channels: any workspace member can subscribe.
+		if ch.Type == "public" {
+			return true, nil
+		}
+		// Private/DM channels: only members.
+		uidUUID, err := util.ParseUUID(userID)
+		if err != nil {
+			return false, nil
+		}
+		_, err = a.q.GetChannelMember(ctx, db.GetChannelMemberParams{
+			ChannelID: idUUID,
+			MemberID:  uidUUID,
+		})
+		return err == nil, nil
 	default:
 		return false, nil
 	}

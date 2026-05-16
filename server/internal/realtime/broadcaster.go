@@ -8,6 +8,7 @@ const (
 	ScopeUser      = "user"
 	ScopeTask      = "task"
 	ScopeChat      = "chat"
+	ScopeChannel   = "channel"
 	// ScopeDaemonRuntime routes daemon wakeup frames through the Redis relay.
 	// It is consumed by the daemon WebSocket hub, not by browser clients.
 	ScopeDaemonRuntime = "daemon_runtime"

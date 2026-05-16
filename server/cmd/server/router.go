@@ -563,6 +563,26 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			})
 			r.Get("/api/chat/pending-tasks", h.ListPendingChatTasks)
 
+			// Channels
+			r.Route("/api/channels", func(r chi.Router) {
+				r.Get("/", h.ListChannels)
+				r.Post("/", h.CreateChannel)
+				r.Route("/{channelId}", func(r chi.Router) {
+					r.Get("/", h.GetChannel)
+					r.Patch("/", h.UpdateChannel)
+					r.Delete("/", h.DeleteChannel)
+					r.Get("/members", h.ListChannelMembers)
+					r.Post("/members", h.AddChannelMember)
+					r.Delete("/members/{memberId}", h.RemoveChannelMember)
+					r.Post("/messages", h.SendChannelMessage)
+					r.Get("/messages", h.ListChannelMessages)
+					r.Route("/messages/{messageId}", func(r chi.Router) {
+						r.Get("/replies", h.ListThreadReplies)
+					})
+					r.Post("/read", h.MarkChannelRead)
+				})
+			})
+
 			// Inbox
 			r.Route("/api/inbox", func(r chi.Router) {
 				r.Get("/", h.ListInbox)

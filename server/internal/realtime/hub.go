@@ -812,7 +812,7 @@ func (c *Client) handleSubscribe(scope, id string) {
 		}
 		// Already auto-subscribed at connect time; reply ack idempotently.
 		c.hub.subscribe(c, scope, id)
-	case ScopeTask, ScopeChat:
+	case ScopeTask, ScopeChat, ScopeChannel:
 		auth := c.hub.authorizer
 		if auth != nil {
 			ok, err := auth.AuthorizeScope(context.Background(), c.userID, c.workspaceID, scope, id)

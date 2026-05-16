@@ -1090,6 +1090,32 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 		s.broadcastChatDone(ctx, task, assistantMsg)
 	}
 
+	// For channel tasks, save agent reply as a channel_message and broadcast.
+	if task.ChannelID.Valid {
+		var payload protocol.TaskCompletedPayload
+		if err := json.Unmarshal(result, &payload); err == nil && payload.Output != "" {
+			body := util.UnescapeBackslashEscapes(payload.Output)
+			var threadParentID pgtype.UUID
+			if task.ChannelMessageID.Valid {
+				threadParentID = task.ChannelMessageID
+			}
+			msg, err := s.Queries.CreateChannelMessage(ctx, db.CreateChannelMessageParams{
+				ChannelID:      task.ChannelID,
+				SenderID:       task.AgentID,
+				SenderType:     "agent",
+				Content:        redact.Text(body),
+				ThreadParentID: threadParentID,
+				TaskID:         task.ID,
+			})
+			if err != nil {
+				slog.Error("failed to save channel agent reply", "task_id", util.UUIDToString(task.ID), "error", err)
+			} else {
+				// Broadcast channel:message to channel scope.
+				s.broadcastChannelMessage(ctx, task.ChannelID, msg)
+			}
+		}
+	}
+
 	// Reconcile agent status
 	s.ReconcileAgentStatus(ctx, task.AgentID)
 
@@ -2128,4 +2154,33 @@ func agentToMap(a db.Agent) map[string]any {
 		"archived_at":          util.TimestampToPtr(a.ArchivedAt),
 		"archived_by":          util.UUIDToPtr(a.ArchivedBy),
 	}
+}
+
+// broadcastChannelMessage broadcasts a channel:message event to the channel scope.
+func (s *TaskService) broadcastChannelMessage(ctx context.Context, channelID pgtype.UUID, msg db.ChannelMessage) {
+	channelIDStr := util.UUIDToString(channelID)
+	payload := map[string]any{
+		"id":          util.UUIDToString(msg.ID),
+		"channel_id":  channelIDStr,
+		"sender_id":   util.UUIDToString(msg.SenderID),
+		"sender_type": msg.SenderType,
+		"content":     msg.Content,
+		"seq":         msg.Seq,
+		"created_at":  util.TimestampToString(msg.CreatedAt),
+		"updated_at":  util.TimestampToString(msg.UpdatedAt),
+	}
+	if msg.ThreadParentID.Valid {
+		payload["thread_parent_id"] = util.UUIDToString(msg.ThreadParentID)
+	}
+	if msg.TaskID.Valid {
+		payload["task_id"] = util.UUIDToString(msg.TaskID)
+	}
+	data, err := json.Marshal(map[string]any{
+		"type":    protocol.EventChannelMessage,
+		"payload": payload,
+	})
+	if err != nil {
+		return
+	}
+	s.Hub.BroadcastToScope(realtime.ScopeChannel, channelIDStr, data)
 }
