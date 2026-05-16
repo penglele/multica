@@ -1302,6 +1302,21 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Channel task: populate workspace and triggering message content.
+	if task.ChannelID.Valid {
+		if ch, err := h.Queries.GetChannel(r.Context(), task.ChannelID); err == nil {
+			resp.ChannelID = uuidToString(ch.ID)
+			if resp.WorkspaceID == "" {
+				resp.WorkspaceID = uuidToString(ch.WorkspaceID)
+			}
+		}
+		if task.ChannelMessageID.Valid {
+			if msg, err := h.Queries.GetChannelMessage(r.Context(), task.ChannelMessageID); err == nil {
+				resp.ChannelMessage = msg.Content
+			}
+		}
+	}
+
 	// Autopilot run_only task: resolve workspace from autopilot_run →
 	// autopilot, and include the autopilot instructions because there is no
 	// issue for the agent to fetch.

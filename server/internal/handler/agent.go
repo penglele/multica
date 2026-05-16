@@ -167,6 +167,8 @@ type AgentTaskResponse struct {
 	ChatSessionID           string                `json:"chat_session_id,omitempty"`           // non-empty for chat tasks
 	ChatMessage             string                `json:"chat_message,omitempty"`              // user message for chat tasks
 	ChatMessageAttachments  []ChatAttachmentMeta  `json:"chat_message_attachments,omitempty"`  // attachments on the user message — agent calls `multica attachment download <id>` per entry
+	ChannelID               string                `json:"channel_id,omitempty"`                // non-empty for channel tasks
+	ChannelMessage          string                `json:"channel_message,omitempty"`           // triggering message content for channel tasks
 	AutopilotRunID          string                `json:"autopilot_run_id,omitempty"`          // non-empty for autopilot-spawned tasks
 	AutopilotID             string                `json:"autopilot_id,omitempty"`              // autopilot that spawned this task
 	AutopilotTitle          string                `json:"autopilot_title,omitempty"`           // autopilot title used as task context

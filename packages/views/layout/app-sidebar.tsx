@@ -44,7 +44,7 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@multica/ui
 import { StatusIcon } from "../issues/components/status-icon";
 import { useIssueDraftStore } from "@multica/core/issues/stores/draft-store";
 import { openCreateIssueWithPreference } from "@multica/core/issues/stores/create-mode-store";
-import { channelListOptions } from "@multica/core/channels";
+import { channelListOptions, useDeleteChannel } from "@multica/core/channels";
 import { CreateChannelDialog } from "../channels/components/create-channel-dialog";
 import {
   Sidebar,
@@ -752,6 +752,7 @@ function ChannelsSidebarSection({
   const [createOpen, setCreateOpen] = React.useState(false);
   const p = paths.workspace(workspaceSlug);
   const { push } = useNavigation();
+  const deleteChannel = useDeleteChannel();
 
   return (
     <>
@@ -782,12 +783,12 @@ function ChannelsSidebarSection({
                 const href = p.channelDetail(ch.id);
                 const isActive = pathname === href;
                 return (
-                  <SidebarMenuItem key={ch.id}>
+                  <SidebarMenuItem key={ch.id} className="group/ch">
                     <SidebarMenuButton
                       size="sm"
                       isActive={isActive}
                       render={<AppLink href={href} />}
-                      className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                      className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground pr-6"
                     >
                       {ch.type === "private" ? (
                         <Lock className="size-3 shrink-0" />
@@ -796,6 +797,19 @@ function ChannelsSidebarSection({
                       )}
                       <span className="truncate">{ch.name}</span>
                     </SidebarMenuButton>
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (confirm(`删除频道 #${ch.name}？`)) {
+                          deleteChannel.mutate(ch.id);
+                          if (pathname === href) push(p.issues());
+                        }
+                      }}
+                      className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover/ch:flex size-4 items-center justify-center rounded text-muted-foreground hover:text-destructive"
+                    >
+                      <X className="size-3" />
+                    </button>
                   </SidebarMenuItem>
                 );
               })}

@@ -1847,6 +1847,9 @@ func (d *Daemon) runRuntimePoller(
 		if taskTarget == "" && task.ChatSessionID != "" {
 			taskTarget = "chat:" + shortID(task.ChatSessionID)
 		}
+		if taskTarget == "" && task.ChannelID != "" {
+			taskTarget = "channel:" + shortID(task.ChannelID)
+		}
 		d.logger.Info("task received", "task", shortID(task.ID), "target", taskTarget)
 		taskWG.Add(1)
 		d.activeTasks.Add(1)
@@ -1940,6 +1943,8 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	}
 	if task.ChatSessionID != "" {
 		taskLog.Info("picked chat task", "chat_session", shortID(task.ChatSessionID), "agent", agentName, "provider", provider)
+	} else if task.ChannelID != "" {
+		taskLog.Info("picked channel task", "channel", shortID(task.ChannelID), "agent", agentName, "provider", provider)
 	} else {
 		taskLog.Info("picked task", "issue", task.IssueID, "agent", agentName, "provider", provider)
 	}
@@ -2083,6 +2088,10 @@ func gcMetaForTask(task Task) (execenv.GCMeta, bool) {
 	case task.ChatSessionID != "":
 		meta.Kind = execenv.GCKindChat
 		meta.ChatSessionID = task.ChatSessionID
+	case task.ChannelID != "":
+		// Channel tasks reuse the chat GC kind — same lifecycle, no issue to track.
+		meta.Kind = execenv.GCKindChat
+		meta.ChatSessionID = task.ChannelID // use channel ID as the session anchor
 	case task.AutopilotRunID != "":
 		meta.Kind = execenv.GCKindAutopilotRun
 		meta.AutopilotRunID = task.AutopilotRunID

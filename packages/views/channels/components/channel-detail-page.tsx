@@ -1,14 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Hash, Lock, Settings, Users, X, ChevronRight, Send } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
-import { useNavigation } from "../../navigation";
 import { PageHeader } from "../../layout/page-header";
 import {
   channelDetailOptions,
@@ -20,6 +19,7 @@ import {
 } from "@multica/core/channels";
 import type { ChannelMessage } from "@multica/core/channels";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { agentListOptions } from "@multica/core/workspace/queries";
 
 import { ChannelMembersDialog } from "./channel-members-dialog";
 
@@ -96,6 +96,7 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
               sendMessage.mutate({ channelId: channel.id, content })
             }
             disabled={sendMessage.isPending}
+            channelId={channel.id}
           />
         </div>
         {openThreadId && (
@@ -211,38 +212,85 @@ function MessageRow({
 }
 
 // ---------------------------------------------------------------------------
-// MessageComposer
+// MessageComposer with @mention autocomplete
 // ---------------------------------------------------------------------------
 
 function MessageComposer({
   onSend,
   disabled,
   placeholder = "发送消息... (@mention 触发 agent)",
+  channelId,
 }: {
   onSend: (content: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  channelId?: string;
 }) {
   const [value, setValue] = useState("");
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  const { data: members = [] } = useQuery({
+    ...channelMembersOptions(channelId ?? ""),
+    enabled: !!channelId,
+  });
+  const wsId = useWorkspaceId();
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+
+  // Detect @mention trigger
+  function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    const v = e.target.value;
+    setValue(v);
+    const match = v.match(/@(\w*)$/);
+    setMentionQuery(match ? match[1] : null);
+  }
+
+  // Agent members in this channel
+  const agentMemberIds = new Set(members.filter((m) => m.member_type === "agent").map((m) => m.member_id));
+  const agentSuggestions = agents.filter(
+    (a) => agentMemberIds.has(a.id) && (!mentionQuery || a.name.toLowerCase().startsWith(mentionQuery.toLowerCase())),
+  );
+
+  function insertMention(name: string) {
+    setValue((v) => v.replace(/@\w*$/, `@${name} `));
+    setMentionQuery(null);
+    ref.current?.focus();
+  }
 
   const handleSend = useCallback(() => {
     const trimmed = value.trim();
     if (!trimmed || disabled) return;
     onSend(trimmed);
     setValue("");
+    setMentionQuery(null);
     ref.current?.focus();
   }, [value, disabled, onSend]);
 
   return (
     <div className="px-4 pb-4 pt-2">
+      {/* @mention dropdown */}
+      {mentionQuery !== null && agentSuggestions.length > 0 && (
+        <div className="mb-1 border border-border rounded-lg bg-background shadow-sm overflow-hidden">
+          {agentSuggestions.map((a) => (
+            <button
+              key={a.id}
+              onMouseDown={(e) => { e.preventDefault(); insertMention(a.name); }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/50 text-left"
+            >
+              <ActorAvatar actorType="agent" actorId={a.id} size={20} />
+              <span>@{a.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex items-end gap-2 rounded-xl border border-border bg-background px-3 py-2 focus-within:ring-1 focus-within:ring-ring">
         <Textarea
           ref={ref}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={handleChange}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (e.key === "Escape") { setMentionQuery(null); return; }
+            if (e.key === "Enter" && !e.shiftKey && mentionQuery === null) {
               e.preventDefault();
               handleSend();
             }

@@ -18,6 +18,9 @@ func BuildPrompt(task Task, provider string) string {
 	if task.ChatSessionID != "" {
 		return buildChatPrompt(task)
 	}
+	if task.ChannelID != "" {
+		return buildChannelPrompt(task)
+	}
 	if task.TriggerCommentID != "" {
 		return buildCommentPrompt(task, provider)
 	}
@@ -174,6 +177,21 @@ func buildChatPrompt(task Task) string {
 			}
 		}
 		b.WriteString("Use `multica attachment download <id>` to fetch each file locally before referring to it.\n")
+	}
+	return b.String()
+}
+
+// buildChannelPrompt constructs a prompt for channel chat tasks.
+// The agent should reply to the triggering message. Its text output
+// (result.Comment) is written back as a channel_message by CompleteTask.
+func buildChannelPrompt(task Task) string {
+	var b strings.Builder
+	b.WriteString("You are participating in a team channel chat in a Multica workspace.\n")
+	b.WriteString("A user has sent a message in the channel. Read it carefully and reply helpfully.\n")
+	b.WriteString("Your reply will be posted back to the channel automatically — do NOT use any CLI commands to post messages.\n")
+	b.WriteString("Just write your response as plain text.\n\n")
+	if task.ChannelMessage != "" {
+		fmt.Fprintf(&b, "Message:\n%s\n", task.ChannelMessage)
 	}
 	return b.String()
 }
