@@ -34,6 +34,7 @@ import {
   X,
   Zap,
   Users,
+  MessageSquare,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
@@ -42,6 +43,7 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@multica/ui
 import { StatusIcon } from "../issues/components/status-icon";
 import { useIssueDraftStore } from "@multica/core/issues/stores/draft-store";
 import { openCreateIssueWithPreference } from "@multica/core/issues/stores/create-mode-store";
+import { useChannelStore } from "@multica/core/channels";
 import {
   Sidebar,
   SidebarContent,
@@ -693,6 +695,8 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             </SidebarGroupContent>
           </SidebarGroup>
 
+          <ChannelsSidebarButton />
+
           <SidebarGroup>
             <SidebarGroupLabel>{t(($) => $.sidebar.configure_group)}</SidebarGroupLabel>
             <SidebarGroupContent>
@@ -728,5 +732,28 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
+  );
+}
+
+function ChannelsSidebarButton() {
+  const toggle = useChannelStore((s) => s.toggle);
+  const isOpen = useChannelStore((s) => s.isOpen);
+  return (
+    <SidebarGroup>
+      <SidebarGroupContent>
+        <SidebarMenu className="gap-0.5">
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={isOpen}
+              onClick={toggle}
+              className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground cursor-pointer"
+            >
+              <MessageSquare />
+              <span>频道</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
   );
 }

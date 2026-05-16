@@ -7,6 +7,7 @@ import { AppSidebar } from "./app-sidebar";
 import { DashboardGuard } from "./dashboard-guard";
 import { NavigationProgress } from "./navigation-progress";
 import { WorkspacePresencePrefetch } from "./workspace-presence-prefetch";
+import { ChannelPanel } from "../channels";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -35,11 +36,14 @@ export function DashboardLayout({
       <SidebarProvider className="h-svh">
         <WorkspacePresencePrefetch />
         <AppSidebar searchSlot={searchSlot} />
-        <SidebarInset className="relative overflow-hidden">
-          <NavigationProgress />
-          {children}
-          <ModalRegistry />
-          {extra}
+        <SidebarInset className="relative overflow-hidden flex flex-row">
+          <div className="flex-1 min-w-0 overflow-hidden relative">
+            <NavigationProgress />
+            {children}
+            <ModalRegistry />
+            {extra}
+          </div>
+          <ChannelPanel />
         </SidebarInset>
       </SidebarProvider>
     </DashboardGuard>

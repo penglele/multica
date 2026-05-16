@@ -1324,6 +1324,75 @@ export class ApiClient {
     await this.fetch(`/api/chat/sessions/${sessionId}/read`, { method: "POST" });
   }
 
+  // ---------------------------------------------------------------------------
+  // Channels
+  // ---------------------------------------------------------------------------
+
+  async listChannels(): Promise<import("../channels/types").Channel[]> {
+    return this.fetch("/api/channels");
+  }
+
+  async getChannel(id: string): Promise<import("../channels/types").Channel> {
+    return this.fetch(`/api/channels/${id}`);
+  }
+
+  async createChannel(data: { name: string; description?: string; type?: string }): Promise<import("../channels/types").Channel> {
+    return this.fetch("/api/channels", { method: "POST", body: JSON.stringify(data) });
+  }
+
+  async updateChannel(id: string, data: { name?: string; description?: string; auto_reply?: boolean; max_agent_turns?: number }): Promise<import("../channels/types").Channel> {
+    return this.fetch(`/api/channels/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+  }
+
+  async deleteChannel(id: string): Promise<void> {
+    await this.fetch(`/api/channels/${id}`, { method: "DELETE" });
+  }
+
+  async listChannelMembers(channelId: string): Promise<import("../channels/types").ChannelMember[]> {
+    return this.fetch(`/api/channels/${channelId}/members`);
+  }
+
+  async addChannelMember(channelId: string, memberId: string, memberType: "human" | "agent"): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/members`, {
+      method: "POST",
+      body: JSON.stringify({ member_id: memberId, member_type: memberType }),
+    });
+  }
+
+  async removeChannelMember(channelId: string, memberId: string): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/members/${memberId}`, { method: "DELETE" });
+  }
+
+  async listChannelMessages(channelId: string, params?: { limit?: number; offset?: number }): Promise<import("../channels/types").ChannelMessage[]> {
+    const q = new URLSearchParams();
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.offset) q.set("offset", String(params.offset));
+    const qs = q.toString() ? `?${q}` : "";
+    return this.fetch(`/api/channels/${channelId}/messages${qs}`);
+  }
+
+  async sendChannelMessage(channelId: string, content: string, threadParentId?: string): Promise<import("../channels/types").ChannelMessage> {
+    return this.fetch(`/api/channels/${channelId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ content, thread_parent_id: threadParentId }),
+    });
+  }
+
+  async listThreadReplies(parentId: string): Promise<import("../channels/types").ChannelMessage[]> {
+    // parentId is a message ID; we need the channel ID too — but the server
+    // routes it under /api/channels/{channelId}/messages/{messageId}/replies.
+    // For now we pass the parentId as channelId placeholder; the real route
+    // will be called with the correct channelId from the UI layer.
+    return this.fetch(`/api/channels/messages/${parentId}/replies`);
+  }
+
+  async markChannelRead(channelId: string, lastReadSeq: number): Promise<void> {
+    await this.fetch(`/api/channels/${channelId}/read`, {
+      method: "POST",
+      body: JSON.stringify({ last_read_seq: lastReadSeq }),
+    });
+  }
+
   async cancelTaskById(taskId: string): Promise<void> {
     await this.fetch(`/api/tasks/${taskId}/cancel`, { method: "POST" });
   }

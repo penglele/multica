@@ -807,7 +807,43 @@ export function useRealtimeSync(
       }
     });
 
-    return () => {
+    // Channel events
+    const unsubChannelMessage = ws.on("channel:message", (p) => {
+      const msg = p as import("../channels/types").ChannelMessage;
+      // Append to messages cache.
+      qc.setQueryData<import("../channels/types").ChannelMessage[]>(
+        ["channel-messages", msg.channel_id],
+        (old = []) => {
+          if (old.some((m) => m.id === msg.id)) return old;
+          return [...old, msg];
+        },
+      );
+      // If it's a thread reply, also update thread cache.
+      if (msg.thread_parent_id) {
+        qc.setQueryData<import("../channels/types").ChannelMessage[]>(
+          ["channel-thread", msg.thread_parent_id],
+          (old = []) => {
+            if (old.some((m) => m.id === msg.id)) return old;
+            return [...old, msg];
+          },
+        );
+      }
+    });
+
+    const unsubChannelCreated = ws.on("channel:created", () => {
+      const id = getCurrentWsId();
+      if (id) qc.invalidateQueries({ queryKey: ["channels", id, "list"] });
+    });
+
+    const unsubChannelUpdated = ws.on("channel:updated", () => {
+      const id = getCurrentWsId();
+      if (id) qc.invalidateQueries({ queryKey: ["channels", id] });
+    });
+
+    const unsubChannelDeleted = ws.on("channel:deleted", () => {
+      const id = getCurrentWsId();
+      if (id) qc.invalidateQueries({ queryKey: ["channels", id] });
+    });
       unsubAny();
       unsubIssueUpdated();
       unsubIssueCreated();
@@ -844,6 +880,10 @@ export function useRealtimeSync(
       unsubChatSessionRead();
       unsubChatSessionDeleted();
       unsubChatSessionUpdated();
+      unsubChannelMessage();
+      unsubChannelCreated();
+      unsubChannelUpdated();
+      unsubChannelDeleted();
       timers.forEach(clearTimeout);
       timers.clear();
     };
