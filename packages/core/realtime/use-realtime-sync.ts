@@ -844,7 +844,8 @@ export function useRealtimeSync(
       const id = getCurrentWsId();
       if (id) qc.invalidateQueries({ queryKey: ["channels", id] });
     });
-      unsubAny();
+
+    return () => {
       unsubIssueUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();
