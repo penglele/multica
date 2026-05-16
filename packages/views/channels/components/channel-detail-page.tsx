@@ -242,7 +242,7 @@ function MessageComposer({
     const v = e.target.value;
     setValue(v);
     const match = v.match(/@(\w*)$/);
-    setMentionQuery(match ? match[1] : null);
+    setMentionQuery(match ? (match[1] ?? "") : null);
   }
 
   // Agent members in this channel
