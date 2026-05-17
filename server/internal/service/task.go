@@ -30,6 +30,9 @@ type TaskService struct {
 	Bus       *events.Bus
 	Analytics analytics.Client
 	Wakeup    TaskWakeupNotifier
+	Storage   interface {
+		Upload(ctx context.Context, key string, data []byte, contentType string, filename string) (string, error)
+	}
 	// EmptyClaim caches "this runtime has no queued task" so the daemon
 	// poll path can skip a Postgres scan on the steady-state empty case.
 	// Optional — a nil cache disables the fast path and every claim
@@ -1126,6 +1129,15 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 						// Orchestrator's reply and can manually trigger.
 					}
 					go s.EnqueueChannelTargets(ctx, task.ChannelID, msg, targets, onFailure)
+				}
+
+				// P5: HTML report extraction. When an agent's reply
+				// contains a ```html code block, extract it, save as a
+				// downloadable file via Storage, and create a
+				// result_package artifact. This is how Report Agent's
+				// output becomes a downloadable deliverable.
+				if s.Storage != nil {
+					s.extractAndSaveHTMLReport(ctx, task, msg)
 				}
 			}
 		}
@@ -2432,4 +2444,108 @@ func (s *TaskService) broadcastChannelMessage(ctx context.Context, channelID pgt
 		return
 	}
 	s.Hub.BroadcastToScope(realtime.ScopeChannel, channelIDStr, data)
+}
+
+// extractAndSaveHTMLReport checks if a channel message contains a ```html
+// code block. If found, it saves the HTML as a downloadable file and creates
+// a result_package artifact with the download URL. This is how Report Agent's
+// output becomes a deliverable the user can download from the ARTIFACTS tab.
+func (s *TaskService) extractAndSaveHTMLReport(ctx context.Context, task db.AgentTaskQueue, msg db.ChannelMessage) {
+	content := msg.Content
+
+	// Find ```html ... ``` block
+	const openTag = "```html"
+	const closeTag = "```"
+	start := strings.Index(content, openTag)
+	if start < 0 {
+		return
+	}
+	start += len(openTag)
+	// Skip optional newline after opening tag
+	if start < len(content) && content[start] == '\n' {
+		start++
+	}
+	rest := content[start:]
+	end := strings.Index(rest, closeTag)
+	if end < 0 {
+		return
+	}
+	html := strings.TrimSpace(rest[:end])
+	if len(html) < 50 {
+		return // too short to be a real report
+	}
+
+	// Resolve workspace ID
+	ch, err := s.Queries.GetChannel(ctx, task.ChannelID)
+	if err != nil {
+		return
+	}
+
+	// Save HTML file via Storage
+	filename := fmt.Sprintf("report_%s.html", util.UUIDToString(msg.ID)[:8])
+	key := fmt.Sprintf("workspaces/%s/reports/%s", util.UUIDToString(ch.WorkspaceID), filename)
+	link, err := s.Storage.Upload(ctx, key, []byte(html), "text/html", filename)
+	if err != nil {
+		slog.Warn("failed to save HTML report", "error", err)
+		return
+	}
+
+	// Find the room's analysis_task
+	analysisTask, err := s.Queries.GetDefaultAnalysisTaskForRoom(ctx, task.ChannelID)
+	if err != nil {
+		return
+	}
+
+	// Create result_package artifact
+	payload, _ := json.Marshal(map[string]any{
+		"type":         "html_report",
+		"download_url": link,
+		"filename":     filename,
+		"generated_by": util.UUIDToString(task.AgentID),
+		"message_id":   util.UUIDToString(msg.ID),
+	})
+	fileRefs, _ := json.Marshal([]string{})
+
+	artifact, err := s.Queries.CreateAnalysisArtifact(ctx, db.CreateAnalysisArtifactParams{
+		WorkspaceID:    ch.WorkspaceID,
+		AnalysisTaskID: analysisTask.ID,
+		Type:           "result_package",
+		Title:          "Executive Summary Report",
+		Status:         "completed",
+		Version:        1,
+		Payload:        payload,
+		FileRefs:       fileRefs,
+		CreatedByType:  "agent",
+		CreatedByID:    pgtype.UUID{Bytes: task.AgentID.Bytes, Valid: true},
+	})
+	if err != nil {
+		slog.Warn("failed to create report artifact", "error", err)
+		return
+	}
+
+	// Audit event
+	details, _ := json.Marshal(map[string]any{
+		"artifact_type": "result_package",
+		"report_type":   "html_report",
+		"download_url":  link,
+		"filename":      filename,
+	})
+	_, _ = s.Queries.CreateAnalysisAuditEvent(ctx, db.CreateAnalysisAuditEventParams{
+		WorkspaceID:    ch.WorkspaceID,
+		AnalysisTaskID: pgtype.UUID{Bytes: analysisTask.ID.Bytes, Valid: true},
+		ArtifactID:     pgtype.UUID{Bytes: artifact.ID.Bytes, Valid: true},
+		ActorType:      "agent",
+		ActorID:        pgtype.UUID{Bytes: task.AgentID.Bytes, Valid: true},
+		Action:         "report.generated",
+		TargetType:     pgtype.Text{String: "result_package", Valid: true},
+		TargetID:       pgtype.UUID{Bytes: artifact.ID.Bytes, Valid: true},
+		Details:        details,
+		RuntimeVersion: pgtype.Text{},
+	})
+
+	slog.Info("HTML report saved as artifact",
+		"artifact_id", util.UUIDToString(artifact.ID),
+		"download_url", link,
+		"filename", filename,
+	)
 }
