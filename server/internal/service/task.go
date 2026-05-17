@@ -1742,6 +1742,8 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 		if err == nil {
 			s.Hub.BroadcastToScope(realtime.ScopeChannel, util.UUIDToString(task.ChannelID), data)
 		}
+		// Persist the updated status so page refresh shows correct state.
+		s.persistChannelTargetStatus(ctx, task, channelStatus)
 	}
 }
 
@@ -2209,6 +2211,41 @@ func agentToMap(a db.Agent) map[string]any {
 		"archived_at":          util.TimestampToPtr(a.ArchivedAt),
 		"archived_by":          util.UUIDToPtr(a.ArchivedBy),
 	}
+}
+
+// persistChannelTargetStatus updates the targets JSONB on the triggering
+// channel_message so that page refresh shows the correct status.
+func (s *TaskService) persistChannelTargetStatus(ctx context.Context, task db.AgentTaskQueue, newStatus string) {
+	msg, err := s.Queries.GetChannelMessage(ctx, task.ChannelMessageID)
+	if err != nil {
+		return
+	}
+	var targets []map[string]any
+	if len(msg.Targets) > 0 {
+		_ = json.Unmarshal(msg.Targets, &targets)
+	}
+	agentID := util.UUIDToString(task.AgentID)
+	taskID := util.UUIDToString(task.ID)
+	updated := false
+	for i, t := range targets {
+		if t["kind"] == "agent" && t["id"] == agentID {
+			targets[i]["status"] = newStatus
+			targets[i]["task_id"] = taskID
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		return // target not found — nothing to update
+	}
+	raw, err := json.Marshal(targets)
+	if err != nil {
+		return
+	}
+	_, _ = s.Queries.UpdateChannelMessageTargets(ctx, db.UpdateChannelMessageTargetsParams{
+		ID:      task.ChannelMessageID,
+		Targets: raw,
+	})
 }
 
 // broadcastChannelMessage broadcasts a channel:message event to the channel scope.

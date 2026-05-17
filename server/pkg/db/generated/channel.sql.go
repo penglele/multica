@@ -87,9 +87,9 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 }
 
 const createChannelMessage = `-- name: CreateChannelMessage :one
-INSERT INTO channel_message (channel_id, sender_id, sender_type, content, thread_parent_id, task_id)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at
+INSERT INTO channel_message (channel_id, sender_id, sender_type, content, thread_parent_id, task_id, targets)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at, targets
 `
 
 type CreateChannelMessageParams struct {
@@ -99,6 +99,7 @@ type CreateChannelMessageParams struct {
 	Content        string      `json:"content"`
 	ThreadParentID pgtype.UUID `json:"thread_parent_id"`
 	TaskID         pgtype.UUID `json:"task_id"`
+	Targets        []byte      `json:"targets"`
 }
 
 func (q *Queries) CreateChannelMessage(ctx context.Context, arg CreateChannelMessageParams) (ChannelMessage, error) {
@@ -109,6 +110,7 @@ func (q *Queries) CreateChannelMessage(ctx context.Context, arg CreateChannelMes
 		arg.Content,
 		arg.ThreadParentID,
 		arg.TaskID,
+		arg.Targets,
 	)
 	var i ChannelMessage
 	err := row.Scan(
@@ -122,6 +124,7 @@ func (q *Queries) CreateChannelMessage(ctx context.Context, arg CreateChannelMes
 		&i.TaskID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Targets,
 	)
 	return i, err
 }
@@ -262,7 +265,7 @@ func (q *Queries) GetChannelMember(ctx context.Context, arg GetChannelMemberPara
 }
 
 const getChannelMessage = `-- name: GetChannelMessage :one
-SELECT id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at FROM channel_message WHERE id = $1
+SELECT id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at, targets FROM channel_message WHERE id = $1
 `
 
 func (q *Queries) GetChannelMessage(ctx context.Context, id pgtype.UUID) (ChannelMessage, error) {
@@ -279,6 +282,7 @@ func (q *Queries) GetChannelMessage(ctx context.Context, id pgtype.UUID) (Channe
 		&i.TaskID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Targets,
 	)
 	return i, err
 }
@@ -360,7 +364,7 @@ func (q *Queries) ListChannelMembers(ctx context.Context, channelID pgtype.UUID)
 }
 
 const listChannelMessages = `-- name: ListChannelMessages :many
-SELECT id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at FROM channel_message
+SELECT id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at, targets FROM channel_message
 WHERE channel_id = $1 AND thread_parent_id IS NULL
 ORDER BY seq ASC
 LIMIT $2 OFFSET $3
@@ -392,6 +396,7 @@ func (q *Queries) ListChannelMessages(ctx context.Context, arg ListChannelMessag
 			&i.TaskID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Targets,
 		); err != nil {
 			return nil, err
 		}
@@ -404,7 +409,7 @@ func (q *Queries) ListChannelMessages(ctx context.Context, arg ListChannelMessag
 }
 
 const listChannelMessagesAfterSeq = `-- name: ListChannelMessagesAfterSeq :many
-SELECT id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at FROM channel_message
+SELECT id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at, targets FROM channel_message
 WHERE channel_id = $1 AND seq > $2 AND thread_parent_id IS NULL
 ORDER BY seq ASC
 LIMIT $3
@@ -436,6 +441,7 @@ func (q *Queries) ListChannelMessagesAfterSeq(ctx context.Context, arg ListChann
 			&i.TaskID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Targets,
 		); err != nil {
 			return nil, err
 		}
@@ -497,7 +503,7 @@ func (q *Queries) ListChannels(ctx context.Context, arg ListChannelsParams) ([]C
 }
 
 const listThreadReplies = `-- name: ListThreadReplies :many
-SELECT id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at FROM channel_message
+SELECT id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at, targets FROM channel_message
 WHERE thread_parent_id = $1
 ORDER BY created_at ASC
 `
@@ -522,6 +528,7 @@ func (q *Queries) ListThreadReplies(ctx context.Context, threadParentID pgtype.U
 			&i.TaskID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Targets,
 		); err != nil {
 			return nil, err
 		}
@@ -586,6 +593,34 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.MaxAgentTurns,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateChannelMessageTargets = `-- name: UpdateChannelMessageTargets :one
+UPDATE channel_message SET targets = $2 WHERE id = $1 RETURNING id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at, targets
+`
+
+type UpdateChannelMessageTargetsParams struct {
+	ID      pgtype.UUID `json:"id"`
+	Targets []byte      `json:"targets"`
+}
+
+func (q *Queries) UpdateChannelMessageTargets(ctx context.Context, arg UpdateChannelMessageTargetsParams) (ChannelMessage, error) {
+	row := q.db.QueryRow(ctx, updateChannelMessageTargets, arg.ID, arg.Targets)
+	var i ChannelMessage
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.SenderID,
+		&i.SenderType,
+		&i.Content,
+		&i.Seq,
+		&i.ThreadParentID,
+		&i.TaskID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Targets,
 	)
 	return i, err
 }

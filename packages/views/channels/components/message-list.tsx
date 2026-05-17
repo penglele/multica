@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { cn } from "@multica/ui/lib/utils";
-import type { ChannelMessage } from "@multica/core/channels";
+import type { ChannelMessage, ChannelMessageTarget } from "@multica/core/channels";
 import { ActorAvatar } from "../../common/actor-avatar";
 
 interface MessageListProps {
@@ -13,6 +13,35 @@ interface MessageListProps {
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function targetStatusLabel(status: string): { text: string; className: string } {
+  switch (status) {
+    case "queued":    return { text: "排队中",  className: "text-muted-foreground" };
+    case "running":   return { text: "处理中",  className: "text-brand" };
+    case "completed": return { text: "已完成",  className: "text-muted-foreground" };
+    case "failed":    return { text: "失败",    className: "text-destructive" };
+    case "cancelled": return { text: "已取消",  className: "text-muted-foreground" };
+    default:          return { text: status,   className: "text-muted-foreground" };
+  }
+}
+
+function TargetsFooter({ targets }: { targets: ChannelMessageTarget[] }) {
+  return (
+    <div className="mt-0.5 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
+      <span>已交给</span>
+      {targets.map((t, i) => {
+        const lbl = targetStatusLabel(t.status);
+        return (
+          <span key={`${t.kind}:${t.id}`} className="inline-flex items-center gap-1">
+            <span className="font-medium text-foreground/80">@{t.name}</span>
+            <span className={cn("px-1 rounded", lbl.className)}>{lbl.text}</span>
+            {i < targets.length - 1 && <span>·</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 export function MessageList({ messages, currentUserId, onThreadClick }: MessageListProps) {
@@ -49,6 +78,9 @@ export function MessageList({ messages, currentUserId, onThreadClick }: MessageL
                 <span className="text-[10px] text-muted-foreground">{formatTime(msg.created_at)}</span>
               </div>
               <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+              {msg.targets && msg.targets.length > 0 && (
+                <TargetsFooter targets={msg.targets} />
+              )}
               {onThreadClick && (
                 <button
                   onClick={() => onThreadClick(msg.id)}

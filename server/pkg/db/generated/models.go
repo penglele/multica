@@ -194,6 +194,7 @@ type ChannelMessage struct {
 	TaskID         pgtype.UUID        `json:"task_id"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	Targets        []byte             `json:"targets"`
 }
 
 type ChannelReadState struct {

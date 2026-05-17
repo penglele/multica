@@ -352,6 +352,18 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	// rather than enqueue tasks that will be cancelled.
 	targets := h.resolveChannelTargets(r.Context(), channelID, msg)
 
+	// Persist targets on the message so they survive page refresh.
+	if len(targets) > 0 {
+		if raw, err := json.Marshal(targets); err == nil {
+			if updated, err := h.Queries.UpdateChannelMessageTargets(r.Context(), db.UpdateChannelMessageTargetsParams{
+				ID:      msg.ID,
+				Targets: raw,
+			}); err == nil {
+				msg = updated
+			}
+		}
+	}
+
 	resp := channelMessageToResponse(msg)
 	resp["targets"] = targets
 	h.broadcastToChannel(uuidToString(channelID), protocol.EventChannelMessage, resp)
@@ -643,6 +655,8 @@ func (h *Handler) enqueueChannelTargets(ctx context.Context, wsID string, channe
 				"agent_id", t.ID,
 				"error", err,
 			)
+			// Broadcast failure so the UI doesn't show "排队中" forever.
+			h.broadcastChannelTargetStatus(uuidToString(channelID), uuidToString(msg.ID), "", t.ID, "failed")
 			continue
 		}
 		slog.Info("channel task enqueued",
@@ -665,6 +679,50 @@ func pgtypeUUIDFromString(s string) (pgtype.UUID, error) {
 // ---------------------------------------------------------------------------
 // Broadcast helpers
 // ---------------------------------------------------------------------------
+
+// broadcastChannelTargetStatus sends a channel:target_update event and
+// persists the new status on the message row so page refresh is consistent.
+func (h *Handler) broadcastChannelTargetStatus(channelID, messageID, taskID, agentID, status string) {
+	payload := map[string]any{
+		"channel_id":         channelID,
+		"channel_message_id": messageID,
+		"task_id":            taskID,
+		"target_kind":        "agent",
+		"target_id":          agentID,
+		"status":             status,
+	}
+	if data, err := marshalEvent("channel:target_update", payload); err == nil {
+		h.Hub.BroadcastToScope("channel", channelID, data)
+	}
+	// Persist so refresh shows correct state.
+	msgUUID, err := pgtypeUUIDFromString(messageID)
+	if err != nil {
+		return
+	}
+	msg, err := h.Queries.GetChannelMessage(context.Background(), msgUUID)
+	if err != nil {
+		return
+	}
+	var targets []map[string]any
+	if len(msg.Targets) > 0 {
+		_ = json.Unmarshal(msg.Targets, &targets)
+	}
+	for i, t := range targets {
+		if t["kind"] == "agent" && t["id"] == agentID {
+			targets[i]["status"] = status
+			if taskID != "" {
+				targets[i]["task_id"] = taskID
+			}
+			break
+		}
+	}
+	if raw, err := json.Marshal(targets); err == nil {
+		_, _ = h.Queries.UpdateChannelMessageTargets(context.Background(), db.UpdateChannelMessageTargetsParams{
+			ID:      msgUUID,
+			Targets: raw,
+		})
+	}
+}
 
 func (h *Handler) broadcastChannelEvent(wsID, eventType string, payload any) {
 	data, err := marshalEvent(eventType, payload)
@@ -724,6 +782,13 @@ func channelMessageToResponse(m db.ChannelMessage) map[string]any {
 	}
 	if m.TaskID.Valid {
 		resp["task_id"] = uuidToString(m.TaskID)
+	}
+	// Include persisted targets so history queries return them too.
+	if len(m.Targets) > 0 && string(m.Targets) != "[]" {
+		var targets []ChannelMessageTarget
+		if err := json.Unmarshal(m.Targets, &targets); err == nil && len(targets) > 0 {
+			resp["targets"] = targets
+		}
 	}
 	return resp
 }
