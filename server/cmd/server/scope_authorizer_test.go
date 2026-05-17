@@ -16,6 +16,8 @@ type fakeScopeQuerier struct {
 	tasks    map[[16]byte]db.AgentTaskQueue
 	issues   map[[16]byte]db.Issue
 	sessions map[[16]byte]db.ChatSession
+	channels map[[16]byte]db.Channel
+	members  map[[32]byte]db.ChannelMember // key = channelID.Bytes ++ memberID.Bytes
 }
 
 func (f *fakeScopeQuerier) GetAgentTask(_ context.Context, id pgtype.UUID) (db.AgentTaskQueue, error) {
@@ -35,6 +37,24 @@ func (f *fakeScopeQuerier) GetChatSession(_ context.Context, id pgtype.UUID) (db
 		return s, nil
 	}
 	return db.ChatSession{}, errors.New("not found")
+}
+func (f *fakeScopeQuerier) GetChannelInWorkspace(_ context.Context, arg db.GetChannelInWorkspaceParams) (db.Channel, error) {
+	if c, ok := f.channels[arg.ID.Bytes]; ok {
+		// Mirror the SQL: only return the channel when its workspace matches.
+		if c.WorkspaceID == arg.WorkspaceID {
+			return c, nil
+		}
+	}
+	return db.Channel{}, errors.New("not found")
+}
+func (f *fakeScopeQuerier) GetChannelMember(_ context.Context, arg db.GetChannelMemberParams) (db.ChannelMember, error) {
+	var key [32]byte
+	copy(key[:16], arg.ChannelID.Bytes[:])
+	copy(key[16:], arg.MemberID.Bytes[:])
+	if m, ok := f.members[key]; ok {
+		return m, nil
+	}
+	return db.ChannelMember{}, errors.New("not found")
 }
 
 func mustUUID(t *testing.T) (string, pgtype.UUID) {
