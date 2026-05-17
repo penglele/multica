@@ -1707,6 +1707,12 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 	if task.ChatSessionID.Valid {
 		payload["chat_session_id"] = util.UUIDToString(task.ChatSessionID)
 	}
+	if task.ChannelID.Valid {
+		payload["channel_id"] = util.UUIDToString(task.ChannelID)
+		if task.ChannelMessageID.Valid {
+			payload["channel_message_id"] = util.UUIDToString(task.ChannelMessageID)
+		}
+	}
 	s.Bus.Publish(events.Event{
 		Type:        eventType,
 		WorkspaceID: workspaceID,
@@ -1714,6 +1720,51 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 		ActorID:     "",
 		Payload:     payload,
 	})
+
+	// For channel tasks, additionally broadcast a `channel:target_update`
+	// event to the channel scope so frontends watching this channel see
+	// per-target status changes (queued → running → completed/failed)
+	// without subscribing to workspace-wide task:* events.
+	if task.ChannelID.Valid && task.ChannelMessageID.Valid {
+		channelStatus := mapTaskStatusToTargetStatus(task.Status, eventType)
+		channelPayload := map[string]any{
+			"channel_id":         util.UUIDToString(task.ChannelID),
+			"channel_message_id": util.UUIDToString(task.ChannelMessageID),
+			"task_id":            util.UUIDToString(task.ID),
+			"target_kind":        "agent",
+			"target_id":          util.UUIDToString(task.AgentID),
+			"status":             channelStatus,
+		}
+		data, err := json.Marshal(map[string]any{
+			"type":    "channel:target_update",
+			"payload": channelPayload,
+		})
+		if err == nil {
+			s.Hub.BroadcastToScope(realtime.ScopeChannel, util.UUIDToString(task.ChannelID), data)
+		}
+	}
+}
+
+// mapTaskStatusToTargetStatus translates internal agent_task_queue status
+// (and the event that triggered the broadcast) into the target lifecycle
+// vocabulary used by the channel UI.
+func mapTaskStatusToTargetStatus(status, eventType string) string {
+	switch eventType {
+	case protocol.EventTaskQueued:
+		return "queued"
+	case protocol.EventTaskDispatch:
+		return "running"
+	case protocol.EventTaskCompleted:
+		return "completed"
+	case protocol.EventTaskFailed:
+		return "failed"
+	case protocol.EventTaskCancelled:
+		return "cancelled"
+	}
+	if status == "" {
+		return "queued"
+	}
+	return status
 }
 
 // ResolveTaskWorkspaceID determines the workspace ID for a task.

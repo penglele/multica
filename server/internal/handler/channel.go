@@ -288,6 +288,17 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 // Channel Messages
 // ---------------------------------------------------------------------------
 
+// ChannelMessageTarget represents one agent (or future kind) that's been
+// selected to handle a channel message. Returned in the send response so
+// the user immediately sees who their message went to.
+type ChannelMessageTarget struct {
+	Kind   string `json:"kind"`   // "agent" (squads coming later)
+	ID     string `json:"id"`     // agent UUID
+	Name   string `json:"name"`   // display name for UI
+	TaskID string `json:"task_id,omitempty"` // populated once enqueued
+	Status string `json:"status"` // "queued" | "running" | "completed" | "failed" | "cancelled"
+}
+
 type sendChannelMessageRequest struct {
 	Content        string  `json:"content"`
 	ThreadParentID *string `json:"thread_parent_id"`
@@ -335,12 +346,23 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// B0: Resolve targets synchronously so the response can tell the user
+	// immediately who their message was routed to. Loop prevention and
+	// channel-archived guards are checked here too — we want to fail fast
+	// rather than enqueue tasks that will be cancelled.
+	targets := h.resolveChannelTargets(r.Context(), channelID, msg)
+
 	resp := channelMessageToResponse(msg)
+	resp["targets"] = targets
 	h.broadcastToChannel(uuidToString(channelID), protocol.EventChannelMessage, resp)
 
-	// Trigger agents in background (copy context values needed).
-	ctx := context.Background()
-	go h.triggerChannelAgents(ctx, wsID, channelID, msg)
+	// Enqueue the actual tasks in the background — they're already
+	// promised in the response above, so users see "queued" immediately
+	// and can watch the status flip via WS events.
+	if len(targets) > 0 {
+		ctx := context.Background()
+		go h.enqueueChannelTargets(ctx, wsID, channelID, msg, targets)
+	}
 
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -497,92 +519,119 @@ func isMentionBoundary(rest string) bool {
 	return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
 }
 
-// triggerChannelAgents decides which agents to trigger based on:
-// 1. @mention in the message content
-// 2. auto_reply mode on the channel (any human message triggers all agent members)
-// Loop prevention: agent messages only trigger @mentioned agents, and only if
-// the thread hasn't exceeded max_agent_turns.
-func (h *Handler) triggerChannelAgents(ctx context.Context, wsID string, channelID pgtype.UUID, msg db.ChannelMessage) {
+// resolveChannelTargets decides which agents should respond to a message.
+// Returns a list of ChannelMessageTarget with status="queued" — these are
+// the agents that WILL be enqueued. Loop prevention and channel state are
+// checked here, so an empty result means "no one responds" (not an error).
+//
+// B0 implementation: still uses the existing @mention parser + auto_reply
+// channel flag. Phase B1 will add structured `trigger_mode + targets` from
+// the request body; this function will then prefer those when present.
+func (h *Handler) resolveChannelTargets(ctx context.Context, channelID pgtype.UUID, msg db.ChannelMessage) []ChannelMessageTarget {
 	ch, err := h.Queries.GetChannel(ctx, channelID)
 	if err != nil {
-		return
+		return nil
 	}
 
-	// Loop prevention: count agent turns in this thread.
+	// Loop prevention: cap agent turns per thread.
 	var threadRoot pgtype.UUID
 	if msg.ThreadParentID.Valid {
 		threadRoot = msg.ThreadParentID
 	} else {
 		threadRoot = msg.ID
 	}
-	agentTurns, err := h.Queries.CountAgentTurnsInThread(ctx, threadRoot)
-	if err != nil {
-		agentTurns = 0
-	}
+	agentTurns, _ := h.Queries.CountAgentTurnsInThread(ctx, threadRoot)
 	maxTurns := int32(20)
 	if ch.MaxAgentTurns > 0 {
 		maxTurns = ch.MaxAgentTurns
 	}
 	if agentTurns >= maxTurns {
-		slog.Info("channel agent trigger skipped: max turns reached",
+		slog.Info("channel target resolve: max agent turns reached",
 			"channel_id", uuidToString(channelID),
 			"turns", agentTurns,
 			"max", maxTurns,
 		)
-		return
+		return nil
 	}
 
-	// Get all agent members of this channel.
-	agentMembers, err := h.Queries.ListChannelAgentMembers(ctx, channelID)
-	if err != nil || len(agentMembers) == 0 {
-		return
+	// Load agent members of this channel.
+	agentMemberIDs, err := h.Queries.ListChannelAgentMembers(ctx, channelID)
+	if err != nil || len(agentMemberIDs) == 0 {
+		return nil
 	}
 
-	// Build a map of agent name (lowercase) → agent record for @mention matching.
-	type agentInfo struct {
+	type agentRow struct {
 		id   pgtype.UUID
 		name string
 	}
-	agentsByName := make(map[string]agentInfo)
-	candidateNames := make([]string, 0, len(agentMembers))
-	for _, memberID := range agentMembers {
+	agentsByName := make(map[string]agentRow, len(agentMemberIDs))
+	candidateNames := make([]string, 0, len(agentMemberIDs))
+	idToAgent := make(map[string]agentRow, len(agentMemberIDs))
+	for _, memberID := range agentMemberIDs {
 		agent, err := h.Queries.GetAgent(ctx, memberID)
-		if err != nil {
+		if err != nil || agent.ArchivedAt.Valid || !agent.RuntimeID.Valid {
 			continue
 		}
-		agentsByName[strings.ToLower(agent.Name)] = agentInfo{id: agent.ID, name: agent.Name}
+		row := agentRow{id: agent.ID, name: agent.Name}
+		agentsByName[strings.ToLower(agent.Name)] = row
+		idToAgent[uuidToString(agent.ID)] = row
 		candidateNames = append(candidateNames, agent.Name)
 	}
 
-	// Determine which agents to trigger.
-	var toTrigger []pgtype.UUID
-
+	// Decide which agents should respond.
+	var pickedIDs []pgtype.UUID
 	mentionedNames := parseMentionedNames(msg.Content, candidateNames)
 	if len(mentionedNames) > 0 {
-		// @mention mode: trigger only mentioned agents.
+		// Manual mention: only mentioned agents respond.
 		for _, name := range mentionedNames {
-			if info, ok := agentsByName[strings.ToLower(name)]; ok {
-				toTrigger = append(toTrigger, info.id)
+			if row, ok := agentsByName[strings.ToLower(name)]; ok {
+				pickedIDs = append(pickedIDs, row.id)
 			}
 		}
 	} else if msg.SenderType == "human" && ch.AutoReply {
-		// Auto-reply mode: trigger all agent members on human messages.
-		for _, memberID := range agentMembers {
-			toTrigger = append(toTrigger, memberID)
+		// Auto-reply: every agent member responds.
+		for _, memberID := range agentMemberIDs {
+			if row, ok := idToAgent[uuidToString(memberID)]; ok {
+				pickedIDs = append(pickedIDs, row.id)
+			}
 		}
 	}
 
-	if len(toTrigger) == 0 {
-		return
+	if len(pickedIDs) == 0 {
+		return nil
 	}
 
-	for _, agentID := range toTrigger {
-		agent, err := h.Queries.GetAgent(ctx, agentID)
+	targets := make([]ChannelMessageTarget, 0, len(pickedIDs))
+	for _, id := range pickedIDs {
+		row := idToAgent[uuidToString(id)]
+		targets = append(targets, ChannelMessageTarget{
+			Kind:   "agent",
+			ID:     uuidToString(id),
+			Name:   row.name,
+			Status: "queued",
+		})
+	}
+	return targets
+}
+
+// enqueueChannelTargets actually inserts agent_task_queue rows for the
+// resolved targets and notifies the daemon. Runs asynchronously so the
+// HTTP handler can return immediately with the resolved targets.
+func (h *Handler) enqueueChannelTargets(ctx context.Context, wsID string, channelID pgtype.UUID, msg db.ChannelMessage, targets []ChannelMessageTarget) {
+	for _, t := range targets {
+		if t.Kind != "agent" {
+			continue
+		}
+		agentUUID, err := pgtypeUUIDFromString(t.ID)
+		if err != nil {
+			continue
+		}
+		agent, err := h.Queries.GetAgent(ctx, agentUUID)
 		if err != nil || agent.ArchivedAt.Valid || !agent.RuntimeID.Valid {
 			continue
 		}
 		task, err := h.Queries.CreateChannelTask(ctx, db.CreateChannelTaskParams{
-			AgentID:          agentID,
+			AgentID:          agentUUID,
 			RuntimeID:        agent.RuntimeID,
 			Priority:         2,
 			ChannelID:        channelID,
@@ -591,7 +640,7 @@ func (h *Handler) triggerChannelAgents(ctx context.Context, wsID string, channel
 		if err != nil {
 			slog.Error("channel task enqueue failed",
 				"channel_id", uuidToString(channelID),
-				"agent_id", uuidToString(agentID),
+				"agent_id", t.ID,
 				"error", err,
 			)
 			continue
@@ -599,10 +648,18 @@ func (h *Handler) triggerChannelAgents(ctx context.Context, wsID string, channel
 		slog.Info("channel task enqueued",
 			"task_id", uuidToString(task.ID),
 			"channel_id", uuidToString(channelID),
-			"agent_id", uuidToString(agentID),
+			"agent_id", t.ID,
 		)
 		h.TaskService.NotifyTaskEnqueued(ctx, task)
 	}
+}
+
+func pgtypeUUIDFromString(s string) (pgtype.UUID, error) {
+	var u pgtype.UUID
+	if err := u.Scan(s); err != nil {
+		return u, err
+	}
+	return u, nil
 }
 
 // ---------------------------------------------------------------------------

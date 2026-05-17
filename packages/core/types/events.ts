@@ -82,7 +82,8 @@ export type WSEventType =
   | "channel:deleted"
   | "channel:message"
   | "channel:member_join"
-  | "channel:member_leave";
+  | "channel:member_leave"
+  | "channel:target_update";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;

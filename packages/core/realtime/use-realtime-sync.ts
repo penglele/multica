@@ -849,6 +849,43 @@ export function useRealtimeSync(
       if (id) qc.invalidateQueries({ queryKey: ["channels", id] });
     });
 
+    // Update target status (queued/running/completed/failed) on the
+    // message that triggered this target. Drives the small "已交给 X · 处理中"
+    // line under user messages in the channel UI.
+    const unsubChannelTargetUpdate = ws.on("channel:target_update", (p) => {
+      const payload = p as import("../channels/types").ChannelTargetUpdatePayload;
+      qc.setQueryData<import("../channels/types").ChannelMessage[]>(
+        ["channel-messages", payload.channel_id],
+        (old) => {
+          if (!old) return old;
+          return old.map((m) => {
+            if (m.id !== payload.channel_message_id) return m;
+            const targets = (m.targets ?? []).slice();
+            const idx = targets.findIndex(
+              (t) => t.kind === payload.target_kind && t.id === payload.target_id,
+            );
+            if (idx >= 0) {
+              const existing = targets[idx];
+              if (existing) {
+                targets[idx] = { ...existing, status: payload.status, task_id: payload.task_id };
+              }
+            } else {
+              // Defensive: if the message arrived without a target entry
+              // (older client, race), insert one so the UI still reflects status.
+              targets.push({
+                kind: payload.target_kind,
+                id: payload.target_id,
+                name: payload.target_id.slice(0, 8),
+                task_id: payload.task_id,
+                status: payload.status,
+              });
+            }
+            return { ...m, targets };
+          });
+        },
+      );
+    });
+
     return () => {
       unsubAny();
       unsubIssueUpdated();
@@ -890,6 +927,7 @@ export function useRealtimeSync(
       unsubChannelCreated();
       unsubChannelUpdated();
       unsubChannelDeleted();
+      unsubChannelTargetUpdate();
       timers.forEach(clearTimeout);
       timers.clear();
     };

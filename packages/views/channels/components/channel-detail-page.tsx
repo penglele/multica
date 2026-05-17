@@ -229,6 +229,7 @@ function MessageRow({
           </span>
         </div>
         <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
+        {msg.targets && msg.targets.length > 0 && <MessageTargetsFooter targets={msg.targets} />}
       </div>
       {/* Reply button on hover */}
       <button
@@ -238,6 +239,50 @@ function MessageRow({
         <ChevronRight className="size-3" />
         回复
       </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MessageTargetsFooter — B0 minimal feedback line under user messages.
+// Renders a subtle "已交给 @千问 · 处理中" so the user knows what their
+// message triggered (and can see status flip in real time as WS events
+// for `channel:target_update` arrive).
+// ---------------------------------------------------------------------------
+
+function statusLabel(status: string): { text: string; className: string } {
+  switch (status) {
+    case "queued":
+      return { text: "排队中", className: "text-muted-foreground" };
+    case "running":
+      return { text: "处理中", className: "text-brand" };
+    case "completed":
+      return { text: "已完成", className: "text-muted-foreground" };
+    case "failed":
+      return { text: "失败", className: "text-destructive" };
+    case "cancelled":
+      return { text: "已取消", className: "text-muted-foreground" };
+    default:
+      return { text: status, className: "text-muted-foreground" };
+  }
+}
+
+function MessageTargetsFooter({ targets }: { targets: import("@multica/core/channels").ChannelMessageTarget[] }) {
+  return (
+    <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+      <span>已交给</span>
+      {targets.map((t, i) => {
+        const lbl = statusLabel(t.status);
+        return (
+          <span key={`${t.kind}:${t.id}`} className="inline-flex items-center gap-1">
+            <span className="font-medium text-foreground/80">@{t.name}</span>
+            <span className={cn("px-1 py-px rounded text-[10px]", lbl.className)}>
+              {lbl.text}
+            </span>
+            {i < targets.length - 1 && <span>·</span>}
+          </span>
+        );
+      })}
     </div>
   );
 }

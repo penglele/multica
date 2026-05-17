@@ -19,6 +19,14 @@ export interface ChannelMember {
   joined_at: string;
 }
 
+export interface ChannelMessageTarget {
+  kind: "agent"; // squads coming later
+  id: string;
+  name: string;
+  task_id?: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+}
+
 export interface ChannelMessage {
   id: string;
   channel_id: string;
@@ -30,6 +38,17 @@ export interface ChannelMessage {
   task_id?: string;
   created_at: string;
   updated_at: string;
+  /** B0 minimal feedback: who this message was routed to, and their current status. */
+  targets?: ChannelMessageTarget[];
+}
+
+export interface ChannelTargetUpdatePayload {
+  channel_id: string;
+  channel_message_id: string;
+  task_id: string;
+  target_kind: "agent";
+  target_id: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
 }
 
 export interface CreateChannelRequest {
