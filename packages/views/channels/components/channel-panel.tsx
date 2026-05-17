@@ -1,11 +1,12 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Hash, Plus, X, ChevronLeft, Settings } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
+import { useWSScopeSubscription } from "@multica/core/realtime";
 import {
   channelListOptions,
   channelMessagesOptions,
@@ -36,6 +37,8 @@ export function ChannelPanel() {
   const createChannel = useCreateChannel();
 
   const activeChannel = channels.find((c) => c.id === activeChannelId);
+
+  useWSScopeSubscription("channel", activeChannelId);
 
   if (!isOpen) return null;
 

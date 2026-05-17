@@ -159,7 +159,7 @@ export class WSClient {
     };
   }
 
-  send(message: WSMessage) {
+  send(message: { type: string; payload?: unknown }) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
     }

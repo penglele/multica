@@ -126,7 +126,11 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentActivityKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentRunCountsKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: ["channels", wsId] });
   }
+  qc.invalidateQueries({ queryKey: ["channel-messages"] });
+  qc.invalidateQueries({ queryKey: ["channel-thread"] });
+  qc.invalidateQueries({ queryKey: ["channel-members"] });
   qc.invalidateQueries({ queryKey: workspaceKeys.list() });
 }
 
@@ -846,6 +850,7 @@ export function useRealtimeSync(
     });
 
     return () => {
+      unsubAny();
       unsubIssueUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();

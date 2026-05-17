@@ -6,9 +6,11 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -437,19 +439,62 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 // Agent trigger logic (Phase 4)
 // ---------------------------------------------------------------------------
 
-var atMentionRe = regexp.MustCompile(`@([\w\-\.]+)`)
-
-func parseMentionedNames(content string) []string {
-	matches := atMentionRe.FindAllStringSubmatch(content, -1)
-	seen := make(map[string]bool)
-	names := make([]string, 0, len(matches))
-	for _, m := range matches {
-		if len(m) > 1 && !seen[m[1]] {
-			seen[m[1]] = true
-			names = append(names, m[1])
-		}
+func parseMentionedNames(content string, candidates []string) []string {
+	if content == "" || len(candidates) == 0 {
+		return nil
 	}
+
+	sorted := append([]string(nil), candidates...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return utf8.RuneCountInString(sorted[i]) > utf8.RuneCountInString(sorted[j])
+	})
+
+	lowerContent := strings.ToLower(content)
+	seen := make(map[string]bool, len(sorted))
+	names := make([]string, 0, len(sorted))
+
+	for i := 0; i < len(lowerContent); {
+		r, size := utf8.DecodeRuneInString(lowerContent[i:])
+		if r != '@' {
+			i += size
+			continue
+		}
+
+		rest := lowerContent[i+size:]
+		matched := ""
+		for _, candidate := range sorted {
+			lowerCandidate := strings.ToLower(candidate)
+			if !strings.HasPrefix(rest, lowerCandidate) {
+				continue
+			}
+			if !isMentionBoundary(rest[len(lowerCandidate):]) {
+				continue
+			}
+			matched = candidate
+			break
+		}
+		if matched == "" {
+			i += size
+			continue
+		}
+
+		key := strings.ToLower(matched)
+		if !seen[key] {
+			seen[key] = true
+			names = append(names, matched)
+		}
+		i += size + len(strings.ToLower(matched))
+	}
+
 	return names
+}
+
+func isMentionBoundary(rest string) bool {
+	if rest == "" {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(rest)
+	return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
 }
 
 // triggerChannelAgents decides which agents to trigger based on:
@@ -495,22 +540,24 @@ func (h *Handler) triggerChannelAgents(ctx context.Context, wsID string, channel
 
 	// Build a map of agent name (lowercase) → agent record for @mention matching.
 	type agentInfo struct {
-		id      pgtype.UUID
-		name    string
+		id   pgtype.UUID
+		name string
 	}
 	agentsByName := make(map[string]agentInfo)
+	candidateNames := make([]string, 0, len(agentMembers))
 	for _, memberID := range agentMembers {
 		agent, err := h.Queries.GetAgent(ctx, memberID)
 		if err != nil {
 			continue
 		}
 		agentsByName[strings.ToLower(agent.Name)] = agentInfo{id: agent.ID, name: agent.Name}
+		candidateNames = append(candidateNames, agent.Name)
 	}
 
 	// Determine which agents to trigger.
 	var toTrigger []pgtype.UUID
 
-	mentionedNames := parseMentionedNames(msg.Content)
+	mentionedNames := parseMentionedNames(msg.Content, candidateNames)
 	if len(mentionedNames) > 0 {
 		// @mention mode: trigger only mentioned agents.
 		for _, name := range mentionedNames {

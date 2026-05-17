@@ -1091,22 +1091,21 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	}
 
 	// For channel tasks, save agent reply as a channel_message and broadcast.
+	slog.Debug("channel reply check", "task_id", util.UUIDToString(task.ID), "channel_id_valid", task.ChannelID.Valid, "result_len", len(result))
 	if task.ChannelID.Valid {
 		var payload protocol.TaskCompletedPayload
 		if err := json.Unmarshal(result, &payload); err == nil && payload.Output != "" {
+			slog.Info("saving channel agent reply", "task_id", util.UUIDToString(task.ID), "output_len", len(payload.Output))
 			body := util.UnescapeBackslashEscapes(payload.Output)
-			var threadParentID pgtype.UUID
-			if task.ChannelMessageID.Valid {
-				threadParentID = task.ChannelMessageID
-			}
 			msg, err := s.Queries.CreateChannelMessage(ctx, db.CreateChannelMessageParams{
-				ChannelID:      task.ChannelID,
-				SenderID:       task.AgentID,
-				SenderType:     "agent",
-				Content:        redact.Text(body),
-				ThreadParentID: threadParentID,
-				TaskID:         task.ID,
-			})
+			ChannelID:  task.ChannelID,
+			SenderID:   task.AgentID,
+			SenderType: "agent",
+			Content:    redact.Text(body),
+			// Don't set ThreadParentID — agent replies are top-level messages,
+			// not thread replies. The ChannelMessageID is only used for context.
+			TaskID: task.ID,
+		})
 			if err != nil {
 				slog.Error("failed to save channel agent reply", "task_id", util.UUIDToString(task.ID), "error", err)
 			} else {

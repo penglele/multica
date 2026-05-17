@@ -8,6 +8,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
+import { useWSScopeSubscription } from "@multica/core/realtime";
 import { PageHeader } from "../../layout/page-header";
 import {
   channelDetailOptions,
@@ -39,6 +40,8 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
 
   const sendMessage = useSendChannelMessage();
   const updateChannel = useUpdateChannel();
+
+  useWSScopeSubscription("channel", channelId);
 
   if (!channel) return null;
 
@@ -241,7 +244,7 @@ function MessageComposer({
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const v = e.target.value;
     setValue(v);
-    const match = v.match(/@(\w*)$/);
+    const match = v.match(/(?:^|\s)@([^\s@]*)$/);
     setMentionQuery(match ? (match[1] ?? "") : null);
   }
 
@@ -252,7 +255,7 @@ function MessageComposer({
   );
 
   function insertMention(name: string) {
-    setValue((v) => v.replace(/@\w*$/, `@${name} `));
+    setValue((v) => v.replace(/(?:^|\s)@[^\s@]*$/, (matched) => `${matched.slice(0, -matched.trimStart().length)}@${name} `));
     setMentionQuery(null);
     ref.current?.focus();
   }

@@ -31,3 +31,16 @@ export function useWSReconnect(callback: () => void) {
     return unsub;
   }, [callback, onReconnect]);
 }
+
+/**
+ * Hook that keeps the client subscribed to a realtime scope while mounted.
+ * Automatically re-subscribes after reconnects and unsubscribes on cleanup.
+ */
+export function useWSScopeSubscription(scope: string, id?: string | null) {
+  const { subscribeScope } = useWS();
+
+  useEffect(() => {
+    if (!id) return;
+    return subscribeScope(scope, id);
+  }, [id, scope, subscribeScope]);
+}
