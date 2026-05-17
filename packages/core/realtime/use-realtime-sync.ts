@@ -857,36 +857,61 @@ export function useRealtimeSync(
     // line under user messages in the channel UI.
     const unsubChannelTargetUpdate = ws.on("channel:target_update", (p) => {
       const payload = p as import("../channels/types").ChannelTargetUpdatePayload;
+      // Patches a message list (main channel feed OR a thread feed) with the
+      // new target status. Lifted out so we can apply it to both caches —
+      // without the thread pass, target chips inside a thread panel would
+      // freeze on "排队中" because the WS update only refreshed the main feed.
+      const patch = (
+        old: import("../channels/types").ChannelMessage[] | undefined,
+      ): import("../channels/types").ChannelMessage[] | undefined => {
+        if (!old) return old;
+        let touched = false;
+        const next = old.map((m) => {
+          if (m.id !== payload.channel_message_id) return m;
+          touched = true;
+          const targets = (m.targets ?? []).slice();
+          const idx = targets.findIndex(
+            (t) => t.kind === payload.target_kind && t.id === payload.target_id,
+          );
+          if (idx >= 0) {
+            const existing = targets[idx];
+            if (existing) {
+              targets[idx] = { ...existing, status: payload.status, task_id: payload.task_id };
+            }
+          } else {
+            // Defensive: if the message arrived without a target entry
+            // (older client, race), insert one so the UI still reflects status.
+            targets.push({
+              kind: payload.target_kind,
+              id: payload.target_id,
+              name: payload.target_id.slice(0, 8),
+              task_id: payload.task_id,
+              status: payload.status,
+            });
+          }
+          return { ...m, targets };
+        });
+        return touched ? next : old;
+      };
+
       qc.setQueryData<import("../channels/types").ChannelMessage[]>(
         ["channel-messages", payload.channel_id],
-        (old) => {
-          if (!old) return old;
-          return old.map((m) => {
-            if (m.id !== payload.channel_message_id) return m;
-            const targets = (m.targets ?? []).slice();
-            const idx = targets.findIndex(
-              (t) => t.kind === payload.target_kind && t.id === payload.target_id,
-            );
-            if (idx >= 0) {
-              const existing = targets[idx];
-              if (existing) {
-                targets[idx] = { ...existing, status: payload.status, task_id: payload.task_id };
-              }
-            } else {
-              // Defensive: if the message arrived without a target entry
-              // (older client, race), insert one so the UI still reflects status.
-              targets.push({
-                kind: payload.target_kind,
-                id: payload.target_id,
-                name: payload.target_id.slice(0, 8),
-                task_id: payload.task_id,
-                status: payload.status,
-              });
-            }
-            return { ...m, targets };
-          });
-        },
+        (old) => patch(old),
       );
+
+      // Mirror the patch into any thread cache that happens to hold this
+      // message. We can't know up-front which thread it belongs to (the
+      // payload doesn't carry thread_parent_id), so scan the cache and let
+      // the message-id match decide. Each thread cache is keyed
+      // ['channel-thread', <parentId>].
+      qc
+        .getQueryCache()
+        .findAll({ queryKey: ["channel-thread"] })
+        .forEach((q) => {
+          qc.setQueryData<import("../channels/types").ChannelMessage[]>(q.queryKey, (old) =>
+            patch(old),
+          );
+        });
     });
 
     return () => {

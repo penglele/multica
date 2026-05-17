@@ -428,9 +428,18 @@ function MessageComposer({
       opts = { triggerMode: "manual", targets: [{ kind: "agent", id: agentId }] };
     }
     // Reuse the draft's id (or mint one if the draft was set programmatically
-    // and never went through onChange). The id is rotated only when send
-    // SUCCEEDS — a failed send keeps the same id so the user's retry hits
-    // the server-side dedup path.
+    // and never went through onChange). After this attempt completes — success
+    // OR failure — we rotate the id so the next compose-and-send is treated
+    // as a NEW message. The retry button explicitly reads the failed row's
+    // client_message_id from the message cache, so it doesn't depend on
+    // anything in this component.
+    //
+    // Why rotate on failure too? If a previous send failed only because the
+    // response was lost (server accepted, network died), keeping the same id
+    // means the user's "edit then send" would be deduped against the original
+    // message and the new content silently disappears. Rotating gives them a
+    // fresh attempt for new content; the dedicated retry button is the path
+    // for "send the SAME thing again".
     if (draftIdRef.current === null) {
       draftIdRef.current = mintClientMessageId();
     }
@@ -446,9 +455,12 @@ function MessageComposer({
       setMentionQuery(null);
       ref.current?.focus();
     } catch {
-      // Failure: keep the draft + id intact so the user's next click reuses
-      // the same client_message_id and the server can dedup on the index.
-      // (We don't surface a toast here — C1 will add explicit failed state.)
+      // Failure: rotate the cid but keep the draft text so the user can
+      // edit and resend as a NEW message. The failed row is still in the
+      // message cache with the OLD cid; the explicit "重试" button on that
+      // row reads the cid from the cache, not from this composer, so the
+      // server-side idempotent retry path still works for that case.
+      draftIdRef.current = null;
     }
   }, [value, disabled, onSend, targetMode]);
 
