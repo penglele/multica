@@ -10,13 +10,36 @@ SELECT * FROM channel WHERE id = $1;
 SELECT * FROM channel WHERE id = $1 AND workspace_id = $2;
 
 -- name: ListChannels :many
-SELECT c.* FROM channel c
-WHERE c.workspace_id = $1
+-- Returns each channel the user can access, plus their per-channel read
+-- state (last_read_seq, latest_seq, unread_count). The unread_count excludes
+-- the requesting user's own messages so sending a message doesn't make the
+-- channel look unread to them. We exclude thread replies so unread is
+-- computed against the main message stream only.
+SELECT
+  c.*,
+  COALESCE(crs.last_read_seq, 0)::bigint AS last_read_seq,
+  COALESCE((
+    SELECT MAX(seq)
+    FROM channel_message
+    WHERE channel_id = c.id AND thread_parent_id IS NULL
+  ), 0)::bigint AS latest_seq,
+  COALESCE((
+    SELECT COUNT(*)
+    FROM channel_message m
+    WHERE m.channel_id = c.id
+      AND m.thread_parent_id IS NULL
+      AND m.seq > COALESCE(crs.last_read_seq, 0)
+      AND m.sender_id <> sqlc.arg('user_id')
+  ), 0)::int AS unread_count
+FROM channel c
+LEFT JOIN channel_read_state crs
+  ON crs.channel_id = c.id AND crs.user_id = sqlc.arg('user_id')
+WHERE c.workspace_id = sqlc.arg('workspace_id')
   AND (
     c.type = 'public'
     OR EXISTS (
       SELECT 1 FROM channel_member cm
-      WHERE cm.channel_id = c.id AND cm.member_id = $2
+      WHERE cm.channel_id = c.id AND cm.member_id = sqlc.arg('user_id')
     )
   )
 ORDER BY c.name ASC;
@@ -77,10 +100,24 @@ UPDATE channel_message SET targets = $2 WHERE id = $1 RETURNING *;
 SELECT * FROM channel_message WHERE id = $1;
 
 -- name: ListChannelMessages :many
+-- Legacy offset-based listing. Kept for callers that haven't migrated to
+-- before_seq/after_seq pagination. Returns ASC.
 SELECT * FROM channel_message
 WHERE channel_id = $1 AND thread_parent_id IS NULL
 ORDER BY seq ASC
 LIMIT $2 OFFSET $3;
+
+-- name: ListChannelMessagesBeforeSeq :many
+-- Pagination: load messages strictly older than before_seq, newest-first
+-- so the handler can return the trimmed window. The handler reverses to
+-- ASC for display. To get the initial "latest N" page, pass before_seq
+-- equal to bigint max (or any value larger than any existing seq).
+SELECT * FROM channel_message
+WHERE channel_id = $1
+  AND thread_parent_id IS NULL
+  AND seq < $2
+ORDER BY seq DESC
+LIMIT $3;
 
 -- name: ListChannelMessagesAfterSeq :many
 SELECT * FROM channel_message

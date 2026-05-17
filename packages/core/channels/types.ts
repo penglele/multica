@@ -9,6 +9,18 @@ export interface Channel {
   created_by: string;
   created_at: string;
   updated_at: string;
+  /** B2 routing strategy. */
+  auto_reply_strategy?: "all_agents" | "default_agent";
+  /** B2 default target id (only relevant when strategy === "default_agent"). */
+  default_target_id?: string;
+  /**
+   * C2 read state, populated only by the channel listing endpoint where the
+   * server knows the requesting user. Per-channel get/update returns leave
+   * them undefined; treat undefined as "not loaded yet" rather than zero.
+   */
+  unread_count?: number;
+  last_read_seq?: number;
+  latest_seq?: number;
 }
 
 export interface ChannelMember {

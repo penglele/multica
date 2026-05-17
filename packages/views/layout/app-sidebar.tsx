@@ -795,7 +795,26 @@ function ChannelsSidebarSection({
                       ) : (
                         <Hash className="size-3 shrink-0" />
                       )}
-                      <span className="truncate">{ch.name}</span>
+                      <span
+                        className={cn(
+                          "truncate",
+                          // Bold/highlight the name when unread > 0 and the
+                          // user isn't currently reading this channel.
+                          ch.unread_count && ch.unread_count > 0 && !isActive && "text-foreground font-medium",
+                        )}
+                      >
+                        {ch.name}
+                      </span>
+                      {ch.unread_count !== undefined &&
+                        ch.unread_count > 0 &&
+                        !isActive && (
+                          <span
+                            className="ml-auto inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-brand px-1 text-[10px] font-medium text-brand-foreground tabular-nums"
+                            aria-label={`${ch.unread_count} unread`}
+                          >
+                            {ch.unread_count > 99 ? "99+" : ch.unread_count}
+                          </span>
+                        )}
                     </SidebarMenuButton>
                     <button
                       onClick={(e) => {

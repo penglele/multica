@@ -429,6 +429,8 @@ type ListChannelMessagesParams struct {
 	Offset    int32       `json:"offset"`
 }
 
+// Legacy offset-based listing. Kept for callers that haven't migrated to
+// before_seq/after_seq pagination. Returns ASC.
 func (q *Queries) ListChannelMessages(ctx context.Context, arg ListChannelMessagesParams) ([]ChannelMessage, error) {
 	rows, err := q.db.Query(ctx, listChannelMessages, arg.ChannelID, arg.Limit, arg.Offset)
 	if err != nil {
@@ -508,33 +510,126 @@ func (q *Queries) ListChannelMessagesAfterSeq(ctx context.Context, arg ListChann
 	return items, nil
 }
 
+const listChannelMessagesBeforeSeq = `-- name: ListChannelMessagesBeforeSeq :many
+SELECT id, channel_id, sender_id, sender_type, content, seq, thread_parent_id, task_id, created_at, updated_at, targets, client_message_id FROM channel_message
+WHERE channel_id = $1
+  AND thread_parent_id IS NULL
+  AND seq < $2
+ORDER BY seq DESC
+LIMIT $3
+`
+
+type ListChannelMessagesBeforeSeqParams struct {
+	ChannelID pgtype.UUID `json:"channel_id"`
+	Seq       int64       `json:"seq"`
+	Limit     int32       `json:"limit"`
+}
+
+// Pagination: load messages strictly older than before_seq, newest-first
+// so the handler can return the trimmed window. The handler reverses to
+// ASC for display. To get the initial "latest N" page, pass before_seq
+// equal to bigint max (or any value larger than any existing seq).
+func (q *Queries) ListChannelMessagesBeforeSeq(ctx context.Context, arg ListChannelMessagesBeforeSeqParams) ([]ChannelMessage, error) {
+	rows, err := q.db.Query(ctx, listChannelMessagesBeforeSeq, arg.ChannelID, arg.Seq, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChannelMessage{}
+	for rows.Next() {
+		var i ChannelMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.SenderID,
+			&i.SenderType,
+			&i.Content,
+			&i.Seq,
+			&i.ThreadParentID,
+			&i.TaskID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Targets,
+			&i.ClientMessageID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listChannels = `-- name: ListChannels :many
-SELECT c.id, c.workspace_id, c.name, c.description, c.type, c.created_by, c.auto_reply, c.max_agent_turns, c.created_at, c.updated_at, c.auto_reply_strategy, c.default_target_id FROM channel c
-WHERE c.workspace_id = $1
+SELECT
+  c.id, c.workspace_id, c.name, c.description, c.type, c.created_by, c.auto_reply, c.max_agent_turns, c.created_at, c.updated_at, c.auto_reply_strategy, c.default_target_id,
+  COALESCE(crs.last_read_seq, 0)::bigint AS last_read_seq,
+  COALESCE((
+    SELECT MAX(seq)
+    FROM channel_message
+    WHERE channel_id = c.id AND thread_parent_id IS NULL
+  ), 0)::bigint AS latest_seq,
+  COALESCE((
+    SELECT COUNT(*)
+    FROM channel_message m
+    WHERE m.channel_id = c.id
+      AND m.thread_parent_id IS NULL
+      AND m.seq > COALESCE(crs.last_read_seq, 0)
+      AND m.sender_id <> $1
+  ), 0)::int AS unread_count
+FROM channel c
+LEFT JOIN channel_read_state crs
+  ON crs.channel_id = c.id AND crs.user_id = $1
+WHERE c.workspace_id = $2
   AND (
     c.type = 'public'
     OR EXISTS (
       SELECT 1 FROM channel_member cm
-      WHERE cm.channel_id = c.id AND cm.member_id = $2
+      WHERE cm.channel_id = c.id AND cm.member_id = $1
     )
   )
 ORDER BY c.name ASC
 `
 
 type ListChannelsParams struct {
+	UserID      pgtype.UUID `json:"user_id"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	MemberID    pgtype.UUID `json:"member_id"`
 }
 
-func (q *Queries) ListChannels(ctx context.Context, arg ListChannelsParams) ([]Channel, error) {
-	rows, err := q.db.Query(ctx, listChannels, arg.WorkspaceID, arg.MemberID)
+type ListChannelsRow struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	Name              string             `json:"name"`
+	Description       pgtype.Text        `json:"description"`
+	Type              string             `json:"type"`
+	CreatedBy         pgtype.UUID        `json:"created_by"`
+	AutoReply         bool               `json:"auto_reply"`
+	MaxAgentTurns     int32              `json:"max_agent_turns"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	AutoReplyStrategy string             `json:"auto_reply_strategy"`
+	DefaultTargetID   pgtype.UUID        `json:"default_target_id"`
+	LastReadSeq       int64              `json:"last_read_seq"`
+	LatestSeq         int64              `json:"latest_seq"`
+	UnreadCount       int32              `json:"unread_count"`
+}
+
+// Returns each channel the user can access, plus their per-channel read
+// state (last_read_seq, latest_seq, unread_count). The unread_count excludes
+// the requesting user's own messages so sending a message doesn't make the
+// channel look unread to them. We exclude thread replies so unread is
+// computed against the main message stream only.
+func (q *Queries) ListChannels(ctx context.Context, arg ListChannelsParams) ([]ListChannelsRow, error) {
+	rows, err := q.db.Query(ctx, listChannels, arg.UserID, arg.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Channel{}
+	items := []ListChannelsRow{}
 	for rows.Next() {
-		var i Channel
+		var i ListChannelsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
@@ -548,6 +643,9 @@ func (q *Queries) ListChannels(ctx context.Context, arg ListChannelsParams) ([]C
 			&i.UpdatedAt,
 			&i.AutoReplyStrategy,
 			&i.DefaultTargetID,
+			&i.LastReadSeq,
+			&i.LatestSeq,
+			&i.UnreadCount,
 		); err != nil {
 			return nil, err
 		}

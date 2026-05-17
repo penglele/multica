@@ -1363,10 +1363,15 @@ export class ApiClient {
     await this.fetch(`/api/channels/${channelId}/members/${memberId}`, { method: "DELETE" });
   }
 
-  async listChannelMessages(channelId: string, params?: { limit?: number; offset?: number }): Promise<import("../channels/types").ChannelMessage[]> {
+  async listChannelMessages(
+    channelId: string,
+    params?: { limit?: number; offset?: number; before_seq?: number; after_seq?: number },
+  ): Promise<import("../channels/types").ChannelMessage[]> {
     const q = new URLSearchParams();
     if (params?.limit) q.set("limit", String(params.limit));
     if (params?.offset) q.set("offset", String(params.offset));
+    if (params?.before_seq !== undefined) q.set("before_seq", String(params.before_seq));
+    if (params?.after_seq !== undefined) q.set("after_seq", String(params.after_seq));
     const qs = q.toString() ? `?${q}` : "";
     return this.fetch(`/api/channels/${channelId}/messages${qs}`);
   }

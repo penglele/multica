@@ -17,6 +17,8 @@ import {
   channelThreadOptions,
   useSendChannelMessage,
   useUpdateChannel,
+  useMarkChannelRead,
+  useLoadEarlierChannelMessages,
 } from "@multica/core/channels";
 import type { ChannelMessage } from "@multica/core/channels";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -42,8 +44,30 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
 
   const sendMessage = useSendChannelMessage();
   const updateChannel = useUpdateChannel();
+  const markRead = useMarkChannelRead();
+  const loadEarlier = useLoadEarlierChannelMessages();
+  // Once a load returns 0 we know we've reached the start of history and
+  // can stop showing the button. State is local to this page (cleared on
+  // navigation away).
+  const [reachedStart, setReachedStart] = useState(false);
 
   useWSScopeSubscription("channel", channelId);
+
+  // Auto-advance the channel's read cursor whenever the user is looking at
+  // it AND new messages have arrived. We key on the highest seq currently
+  // in the message cache; an advance happens on mount (initial 50 already
+  // loaded) and on every WS-driven append. Sender-doesn't-matter — once
+  // visible, we treat it as read.
+  const highestSeq = messages.length > 0 ? messages[messages.length - 1]?.seq ?? 0 : 0;
+  const lastMarkedRef = useRef<number>(0);
+  useEffect(() => {
+    if (!channelId || highestSeq <= 0) return;
+    if (highestSeq <= lastMarkedRef.current) return;
+    lastMarkedRef.current = highestSeq;
+    markRead.mutate({ channelId, lastReadSeq: highestSeq });
+    // markRead is stable enough to not include in deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId, highestSeq]);
 
   if (!channel) return null;
 
@@ -97,6 +121,12 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
             activeThreadId={openThreadId}
             agents={agents}
             wsMembers={wsMembers}
+            hasMore={!reachedStart}
+            isLoadingEarlier={loadEarlier.isPending}
+            onLoadEarlier={async () => {
+              const got = await loadEarlier.mutateAsync({ channelId: channel.id });
+              if (got === 0) setReachedStart(true);
+            }}
             onRetry={(failed) => {
               if (!failed.client_message_id) return;
               // Retry with the same client_message_id so the server's unique
@@ -158,6 +188,9 @@ function MessageFeed({
   agents = [],
   wsMembers = [],
   onRetry,
+  onLoadEarlier,
+  hasMore = true,
+  isLoadingEarlier = false,
 }: {
   messages: ChannelMessage[];
   currentUserId?: string;
@@ -166,11 +199,25 @@ function MessageFeed({
   agents?: import("@multica/core/types").Agent[];
   wsMembers?: import("@multica/core/types").MemberWithUser[];
   onRetry?: (msg: ChannelMessage) => void;
+  onLoadEarlier?: () => void;
+  hasMore?: boolean;
+  isLoadingEarlier?: boolean;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
-
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Auto-scroll to bottom only when the user is already near the bottom.
+  // After they pull up to read history we don't want a new agent reply to
+  // yank them back down.
+  const lastLenRef = useRef(0);
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const c = containerRef.current;
+    const grew = messages.length > lastLenRef.current;
+    lastLenRef.current = messages.length;
+    if (!c || !grew) return;
+    const fromBottom = c.scrollHeight - c.scrollTop - c.clientHeight;
+    if (fromBottom < 200) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages.length]);
 
   if (messages.length === 0) {
@@ -182,7 +229,19 @@ function MessageFeed({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-0.5">
+    <div ref={containerRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-0.5">
+      {onLoadEarlier && hasMore && (
+        <div className="flex justify-center pb-2">
+          <button
+            onClick={onLoadEarlier}
+            disabled={isLoadingEarlier}
+            className="text-xs text-muted-foreground hover:text-foreground px-3 py-1 rounded hover:bg-muted disabled:opacity-50 disabled:cursor-wait inline-flex items-center gap-1"
+          >
+            {isLoadingEarlier && <Loader2 className="size-3 animate-spin" />}
+            {isLoadingEarlier ? "加载中…" : "加载更早消息"}
+          </button>
+        </div>
+      )}
       {messages.map((msg) => (
         <MessageRow
           key={msg.id}

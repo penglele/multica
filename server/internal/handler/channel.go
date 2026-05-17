@@ -87,7 +87,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 
 	channels, err := h.Queries.ListChannels(r.Context(), db.ListChannelsParams{
 		WorkspaceID: wsUUID,
-		MemberID:    parseUUID(userID),
+		UserID:      parseUUID(userID),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channels")
@@ -96,7 +96,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]map[string]any, 0, len(channels))
 	for _, ch := range channels {
-		resp = append(resp, channelToResponse(ch))
+		resp = append(resp, channelListRowToResponse(ch))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -515,23 +515,68 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit := int32(50)
-	offset := int32(0)
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
 			limit = int32(n)
 		}
 	}
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = int32(n)
+
+	// Three pagination modes, picked by query param:
+	//   ?after_seq=N   → reconnect resync: messages with seq > N, ASC.
+	//   ?before_seq=N  → "load earlier": messages with seq < N, ASC after reverse.
+	//   (none)         → initial load: latest N messages, ASC.
+	// after_seq wins if both are provided.
+	var msgs []db.ChannelMessage
+	var err error
+	if v := r.URL.Query().Get("after_seq"); v != "" {
+		afterSeq, perr := strconv.ParseInt(v, 10, 64)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "after_seq must be an integer")
+			return
+		}
+		msgs, err = h.Queries.ListChannelMessagesAfterSeq(r.Context(), db.ListChannelMessagesAfterSeqParams{
+			ChannelID: channelID,
+			Seq:       afterSeq,
+			Limit:     limit,
+		})
+	} else if v := r.URL.Query().Get("before_seq"); v != "" {
+		beforeSeq, perr := strconv.ParseInt(v, 10, 64)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "before_seq must be an integer")
+			return
+		}
+		// Query returns DESC; reverse so callers always get ASC.
+		raw, qerr := h.Queries.ListChannelMessagesBeforeSeq(r.Context(), db.ListChannelMessagesBeforeSeqParams{
+			ChannelID: channelID,
+			Seq:       beforeSeq,
+			Limit:     limit,
+		})
+		if qerr != nil {
+			err = qerr
+		} else {
+			msgs = make([]db.ChannelMessage, len(raw))
+			for i, m := range raw {
+				msgs[len(raw)-1-i] = m
+			}
+		}
+	} else {
+		// Initial load: latest N. Use BeforeSeq with bigint-max as a sentinel,
+		// then reverse so the response is ASC (oldest of the window first).
+		raw, qerr := h.Queries.ListChannelMessagesBeforeSeq(r.Context(), db.ListChannelMessagesBeforeSeqParams{
+			ChannelID: channelID,
+			Seq:       9223372036854775807, // math.MaxInt64
+			Limit:     limit,
+		})
+		if qerr != nil {
+			err = qerr
+		} else {
+			msgs = make([]db.ChannelMessage, len(raw))
+			for i, m := range raw {
+				msgs[len(raw)-1-i] = m
+			}
 		}
 	}
 
-	msgs, err := h.Queries.ListChannelMessages(r.Context(), db.ListChannelMessagesParams{
-		ChannelID: channelID,
-		Limit:     limit,
-		Offset:    offset,
-	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list messages")
 		return
@@ -680,6 +725,33 @@ func marshalEvent(eventType string, payload any) ([]byte, error) {
 // ---------------------------------------------------------------------------
 // Response helpers
 // ---------------------------------------------------------------------------
+
+// channelListRowToResponse projects ListChannelsRow (channel + per-user read
+// state). Returned only by ListChannels — the unread/last_read/latest fields
+// are scoped to the requesting user, so it would be misleading to put them
+// on every channel response.
+func channelListRowToResponse(ch db.ListChannelsRow) map[string]any {
+	resp := map[string]any{
+		"id":                  uuidToString(ch.ID),
+		"workspace_id":        uuidToString(ch.WorkspaceID),
+		"name":                ch.Name,
+		"description":         ch.Description.String,
+		"type":                ch.Type,
+		"auto_reply":          ch.AutoReply,
+		"max_agent_turns":     ch.MaxAgentTurns,
+		"auto_reply_strategy": ch.AutoReplyStrategy,
+		"created_by":          uuidToString(ch.CreatedBy),
+		"created_at":          ch.CreatedAt.Time,
+		"updated_at":          ch.UpdatedAt.Time,
+		"last_read_seq":       ch.LastReadSeq,
+		"latest_seq":          ch.LatestSeq,
+		"unread_count":        ch.UnreadCount,
+	}
+	if ch.DefaultTargetID.Valid {
+		resp["default_target_id"] = uuidToString(ch.DefaultTargetID)
+	}
+	return resp
+}
 
 func channelToResponse(ch db.Channel) map[string]any {
 	resp := map[string]any{

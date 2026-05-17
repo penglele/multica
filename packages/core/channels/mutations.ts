@@ -146,9 +146,73 @@ export function useSendChannelMessage() {
 }
 
 export function useMarkChannelRead() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ channelId, lastReadSeq }: { channelId: string; lastReadSeq: number }) =>
       api.markChannelRead(channelId, lastReadSeq),
+    // Patch the channel listing cache so the sidebar badge reflects the new
+    // read state without waiting for a refetch. The server-side index is
+    // GREATEST(existing, incoming), so we only ever advance — same here.
+    onMutate: ({ channelId, lastReadSeq }) => {
+      // The list cache is keyed by workspace id, but a mark-read call
+      // doesn't know the workspace id directly. setQueriesData with the
+      // ["channels"] prefix matches every workspace's list — there's
+      // typically one in flight at a time.
+      qc.setQueriesData<Channel[]>({ queryKey: ["channels"] }, (old) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((c) => {
+          if (c.id !== channelId) return c;
+          const newLastRead = Math.max(c.last_read_seq ?? 0, lastReadSeq);
+          // Common case: mark-read advances to the latest seen seq, which
+          // collapses unread to 0. Partial advances are rare (and resolved
+          // on the next list refresh) so we just leave the count alone there.
+          const newUnread = newLastRead >= (c.latest_seq ?? 0) ? 0 : c.unread_count ?? 0;
+          return { ...c, last_read_seq: newLastRead, unread_count: newUnread };
+        });
+      });
+    },
+  });
+}
+
+/**
+ * Loads the page of messages strictly older than the oldest currently in the
+ * cache (using the server's seq cursor) and prepends them. Used by the
+ * "Load earlier" button. Resolves to the count of new messages; resolving
+ * to 0 means "no more history" so the UI can hide the button.
+ */
+export function useLoadEarlierChannelMessages() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      channelId,
+      pageSize = 50,
+    }: {
+      channelId: string;
+      pageSize?: number;
+    }) => {
+      const existing =
+        qc.getQueryData<ChannelMessage[]>(channelKeys.messages(channelId)) ?? [];
+      // The cache is sorted ASC by seq; the oldest is at index 0. If the
+      // cache is empty we'd be loading the latest page — which is what the
+      // initial query already does — so treat empty as "nothing to load
+      // earlier".
+      if (existing.length === 0) return 0;
+      const oldestSeq = existing[0]?.seq ?? 0;
+      if (oldestSeq <= 1) return 0;
+      const older = await api.listChannelMessages(channelId, {
+        before_seq: oldestSeq,
+        limit: pageSize,
+      });
+      if (older.length === 0) return 0;
+      qc.setQueryData<ChannelMessage[]>(channelKeys.messages(channelId), (cur = []) => {
+        // Dedup by id just in case (concurrent loads / WS overlap).
+        const have = new Set(cur.map((m) => m.id));
+        const merged = [...older.filter((m) => !have.has(m.id)), ...cur];
+        // Preserve ASC order by seq.
+        return merged.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+      });
+      return older.length;
+    },
   });
 }
 

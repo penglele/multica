@@ -128,10 +128,58 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: agentRunCountsKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: ["channels", wsId] });
   }
-  qc.invalidateQueries({ queryKey: ["channel-messages"] });
+  // Channel messages get a SURGICAL resync (delta fetch via after_seq +
+  // merge) instead of a blanket invalidate, otherwise reconnecting would
+  // (a) wipe any "Load earlier" history the user pulled in and (b) blow
+  // away optimistic placeholders / failed delivery states.
+  void resyncChannelMessages(qc).catch(() => {});
   qc.invalidateQueries({ queryKey: ["channel-thread"] });
   qc.invalidateQueries({ queryKey: ["channel-members"] });
   qc.invalidateQueries({ queryKey: workspaceKeys.list() });
+}
+
+/**
+ * For each channel-messages cache entry, find the highest seq currently in
+ * cache and ask the server for messages with seq > N. Merge into the cache
+ * by id-dedup and re-sort. Used on WS reconnect to recover messages we
+ * missed while disconnected without losing local state (placeholders,
+ * paginated history).
+ */
+async function resyncChannelMessages(qc: QueryClient): Promise<void> {
+  const entries = qc.getQueryCache().findAll({ queryKey: ["channel-messages"] });
+  await Promise.all(
+    entries.map(async (q) => {
+      const channelId = q.queryKey[1];
+      if (typeof channelId !== "string" || !channelId) return;
+      const cur = (q.state.data as import("../channels/types").ChannelMessage[] | undefined) ?? [];
+      // Find the highest committed seq. Skip placeholders (seq=MAX_SAFE
+      // sentinel from the optimistic insert) — they don't reflect server state.
+      const SENTINEL = Number.MAX_SAFE_INTEGER;
+      let maxSeq = 0;
+      for (const m of cur) {
+        if (m.seq && m.seq < SENTINEL && m.seq > maxSeq) maxSeq = m.seq;
+      }
+      try {
+        const { api } = await import("../api");
+        const fresh = await api.listChannelMessages(channelId, {
+          after_seq: maxSeq,
+          limit: 200,
+        });
+        if (fresh.length === 0) return;
+        qc.setQueryData<import("../channels/types").ChannelMessage[]>(q.queryKey, (old = []) => {
+          const have = new Set(old.map((m) => m.id));
+          const merged = [...old];
+          for (const m of fresh) {
+            if (!have.has(m.id)) merged.push({ ...m, delivery_status: "sent" });
+          }
+          return merged.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+        });
+      } catch {
+        // Silent: a failed resync just means the cache is stale until the
+        // user navigates or sends another message; don't surface a toast.
+      }
+    }),
+  );
 }
 
 export interface RealtimeSyncStores {
@@ -835,6 +883,29 @@ export function useRealtimeSync(
           (old = []) => merge(old),
         );
       }
+
+      // Bump latest_seq + unread_count in the sidebar listing cache.
+      // Skip the unread bump for thread replies (they don't move the main
+      // channel feed) and for messages the current user just sent (the
+      // mark-read effect in ChannelDetailPage will quickly zero things out
+      // anyway, but skipping the bump avoids a flicker on send). When the
+      // user IS currently looking at the channel, ChannelDetailPage's
+      // auto-mark-read effect will fire and collapse unread back to 0.
+      if (msg.thread_parent_id) return;
+      const myUserId = authStore.getState().user?.id;
+      const isOwn = !!myUserId && msg.sender_id === myUserId;
+      qc.setQueriesData<import("../channels/types").Channel[]>(
+        { queryKey: ["channels"] },
+        (old) => {
+          if (!Array.isArray(old)) return old;
+          return old.map((c) => {
+            if (c.id !== msg.channel_id) return c;
+            const newLatest = Math.max(c.latest_seq ?? 0, msg.seq ?? 0);
+            const newUnread = isOwn ? c.unread_count ?? 0 : (c.unread_count ?? 0) + 1;
+            return { ...c, latest_seq: newLatest, unread_count: newUnread };
+          });
+        },
+      );
     });
 
     const unsubChannelCreated = ws.on("channel:created", () => {
