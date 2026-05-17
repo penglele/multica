@@ -375,6 +375,28 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		ClientMessageID: clientMessageID,
 	})
 	if err != nil {
+		// Race-safe idempotency: if we lost the race against a concurrent
+		// retry that beat us to the unique index, the create returns 23505.
+		// Treat that as success and return the row that did get inserted.
+		if clientMessageID.Valid && isUniqueViolation(err) {
+			existing, lookupErr := h.Queries.GetChannelMessageByClientID(r.Context(), db.GetChannelMessageByClientIDParams{
+				ChannelID:       channelID,
+				ClientMessageID: clientMessageID,
+			})
+			if lookupErr == nil {
+				writeJSON(w, http.StatusOK, channelMessageToResponse(existing))
+				return
+			}
+			slog.Warn("channel send: unique violation but lookup failed",
+				"channel_id", uuidToString(channelID),
+				"client_message_id", clientMessageID.String,
+				"lookup_err", lookupErr,
+			)
+		}
+		slog.Error("channel send: create message failed",
+			"channel_id", uuidToString(channelID),
+			"error", err,
+		)
 		writeError(w, http.StatusInternalServerError, "failed to send message")
 		return
 	}

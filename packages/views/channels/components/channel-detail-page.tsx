@@ -99,8 +99,8 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
             wsMembers={wsMembers}
           />
           <MessageComposer
-            onSend={(content, opts) =>
-              sendMessage.mutate({
+            onSend={async (content, opts) =>
+              sendMessage.mutateAsync({
                 channelId: channel.id,
                 content,
                 triggerMode: opts?.triggerMode,
@@ -303,13 +303,23 @@ type ComposerSendOptions = {
   clientMessageId?: string;
 };
 
+// mintClientMessageId returns a stable id used for idempotent send. The same
+// draft must reuse the same id across retries, so this is meant to be called
+// at the moment a draft starts (first keystroke), not on every send click.
+function mintClientMessageId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `cm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function MessageComposer({
   onSend,
   disabled,
   placeholder = "发送消息...",
   channelId,
 }: {
-  onSend: (content: string, opts?: ComposerSendOptions) => void;
+  onSend: (content: string, opts?: ComposerSendOptions) => void | Promise<unknown>;
   disabled?: boolean;
   placeholder?: string;
   channelId?: string;
@@ -320,6 +330,12 @@ function MessageComposer({
   // (or @mention), "none" = chat-only, "manual:<agentId>" = single agent.
   const [targetMode, setTargetMode] = useState<string>("follow");
   const [pickerOpen, setPickerOpen] = useState(false);
+  // B1 idempotency: client_message_id is bound to a draft, NOT generated on
+  // every click. We mint one when the draft becomes non-empty and keep it
+  // stable until the message is successfully sent (cleared by setValue("")).
+  // This way, two send clicks while the same draft is in flight reuse the
+  // same id and the server returns the existing row instead of duplicating.
+  const draftIdRef = useRef<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   const { data: members = [] } = useQuery({
@@ -332,6 +348,14 @@ function MessageComposer({
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const v = e.target.value;
     setValue(v);
+    // Mint an id the moment the draft becomes non-empty; drop it when the
+    // draft is fully cleared. This anchors the id to "this message attempt",
+    // not "this click".
+    if (v.length > 0 && draftIdRef.current === null) {
+      draftIdRef.current = mintClientMessageId();
+    } else if (v.length === 0) {
+      draftIdRef.current = null;
+    }
     const match = v.match(/(?:^|\s)@([^\s@]*)$/);
     setMentionQuery(match ? (match[1] ?? "") : null);
   }
@@ -348,7 +372,7 @@ function MessageComposer({
     ref.current?.focus();
   }
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const trimmed = value.trim();
     if (!trimmed || disabled) return;
 
@@ -364,17 +388,29 @@ function MessageComposer({
       const agentId = targetMode.slice("manual:".length);
       opts = { triggerMode: "manual", targets: [{ kind: "agent", id: agentId }] };
     }
-    // Generate a client-side id for idempotency on retries (B1 spec).
-    const cid = (typeof crypto !== "undefined" && "randomUUID" in crypto)
-      ? crypto.randomUUID()
-      : `cm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    // Reuse the draft's id (or mint one if the draft was set programmatically
+    // and never went through onChange). The id is rotated only when send
+    // SUCCEEDS — a failed send keeps the same id so the user's retry hits
+    // the server-side dedup path.
+    if (draftIdRef.current === null) {
+      draftIdRef.current = mintClientMessageId();
+    }
+    const cid = draftIdRef.current;
     if (opts) opts.clientMessageId = cid;
     else opts = { clientMessageId: cid };
 
-    onSend(trimmed, opts);
-    setValue("");
-    setMentionQuery(null);
-    ref.current?.focus();
+    try {
+      await Promise.resolve(onSend(trimmed, opts));
+      // Success: clear the draft and rotate the id for the next message.
+      setValue("");
+      draftIdRef.current = null;
+      setMentionQuery(null);
+      ref.current?.focus();
+    } catch {
+      // Failure: keep the draft + id intact so the user's next click reuses
+      // the same client_message_id and the server can dedup on the index.
+      // (We don't surface a toast here — C1 will add explicit failed state.)
+    }
   }, [value, disabled, onSend, targetMode]);
 
   const targetLabel = (() => {
@@ -535,8 +571,8 @@ function ThreadPanel({
         )}
       </div>
       <MessageComposer
-        onSend={(content, opts) =>
-          sendMessage.mutate({
+        onSend={async (content, opts) =>
+          sendMessage.mutateAsync({
             channelId,
             content,
             threadParentId: parentId,
