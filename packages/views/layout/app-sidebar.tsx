@@ -17,7 +17,6 @@ import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } 
 import { CSS } from "@dnd-kit/utilities";
 import {
   Inbox,
-  ListTodo,
   Bot,
   Monitor,
   ChevronDown,
@@ -33,7 +32,6 @@ import {
   BarChart3,
   X,
   Zap,
-  Users,
   Hash,
   Lock,
 } from "lucide-react";
@@ -139,11 +137,14 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] 
 ];
 
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
-  { key: "issues", labelKey: "issues", icon: ListTodo },
+  // BONCML Workspace P1: Issues and Squads no longer surface as primary
+  // product entries. Both routes remain reachable for power users (deep
+  // links, admin tooling) but should not compete with the Workspace
+  // Rail's Rooms / Members / Agents inside BONCML's main flow.
+  // Re-add here only if a specific use case demands it.
   { key: "projects", labelKey: "projects", icon: FolderKanban },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
   { key: "agents", labelKey: "agents", icon: Bot },
-  { key: "squads", labelKey: "squads", icon: Users },
   { key: "usage", labelKey: "usage", icon: BarChart3 },
 ];
 
@@ -424,7 +425,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
         ? list.find((w) => w.id === invitation.workspace_id)
         : null;
       if (joined) {
-        push(paths.workspace(joined.slug).issues());
+        push(paths.workspace(joined.slug).home());
       }
     },
   });
@@ -518,7 +519,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                       <DropdownMenuItem
                         key={ws.id}
                         render={
-                          <AppLink href={paths.workspace(ws.slug).issues()} />
+                          <AppLink href={paths.workspace(ws.slug).home()} />
                         }
                       >
                         <WorkspaceAvatar name={ws.name} size="sm" />
@@ -763,7 +764,7 @@ function ChannelsSidebarSection({
             className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
           >
             {collapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
-            Channels
+            Rooms
             {channels.length > 0 && (
               <span className="ml-1 text-[10px] text-muted-foreground">{channels.length}</span>
             )}
@@ -771,7 +772,7 @@ function ChannelsSidebarSection({
           <button
             onClick={() => setCreateOpen(true)}
             className="rounded-md p-0.5 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground transition-colors"
-            title="新建频道"
+            title="新建分析房间"
           >
             <Plus className="size-3.5" />
           </button>
@@ -828,9 +829,9 @@ function ChannelsSidebarSection({
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        if (confirm(`删除频道 #${ch.name}？`)) {
+                        if (confirm(`删除房间 #${ch.name}？`)) {
                           deleteChannel.mutate(ch.id);
-                          if (pathname === href) push(p.issues());
+                          if (pathname === href) push(p.home());
                         }
                       }}
                       className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover/ch:flex size-4 items-center justify-center rounded text-muted-foreground hover:text-destructive"
@@ -842,7 +843,7 @@ function ChannelsSidebarSection({
               })}
               {channels.length === 0 && (
                 <div className="px-2 py-1 text-[11px] text-muted-foreground">
-                  暂无频道
+                  暂无房间
                 </div>
               )}
             </SidebarMenu>

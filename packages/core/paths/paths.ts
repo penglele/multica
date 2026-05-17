@@ -19,6 +19,15 @@ function workspaceScoped(slug: string) {
   return {
     channels: () => `${ws}/channels`,
     channelDetail: (id: string) => `${ws}/channels/${encode(id)}`,
+    /** BONCML Workspace product home — the default landing for any
+     *  authenticated user inside this workspace. Resolves to the rooms
+     *  index, which redirects to the first room or shows an empty-state
+     *  CTA to create the first analysis room. */
+    home: () => `${ws}/rooms`,
+    /** Rooms index. Same URL as home() today; kept as a separate alias
+     *  so call sites that mean "rooms list" don't get tied to the
+     *  ambiguous `home`. */
+    rooms: () => `${ws}/rooms`,
     /** BONCML Workspace shell wrapping a single channel (== room) inside
      *  the four-tab analyst workbench. Coexists with channelDetail; we
      *  keep the old route alive so anything that links to it still works. */

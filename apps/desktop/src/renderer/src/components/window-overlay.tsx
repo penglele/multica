@@ -49,7 +49,7 @@ function WindowOverlayInner() {
     <div className="fixed inset-0 z-50 flex flex-col overflow-auto bg-background">
       {overlay.type === "new-workspace" && (
         <NewWorkspacePage
-          onSuccess={(ws) => push(paths.workspace(ws.slug).issues())}
+          onSuccess={(ws) => push(paths.workspace(ws.slug).home())}
           onBack={onBack}
         />
       )}
@@ -64,12 +64,14 @@ function WindowOverlayInner() {
         <OnboardingFlow
           onComplete={(ws) => {
             close();
-            // Post-onboarding landing is always the workspace issues
-            // list. The welcome-issue flow moved into a dialog that
-            // renders on that page (StarterContentPrompt), so the
-            // flow doesn't need to thread a target issue id back here.
+            // Post-onboarding landing is the BONCML Workspace home (the
+            // rooms index, which redirects to the first room or shows
+            // the create-first-room CTA). The welcome-issue flow moved
+            // into a dialog that renders on that page
+            // (StarterContentPrompt), so the flow doesn't need to
+            // thread a target issue id back here.
             if (ws) {
-              push(paths.workspace(ws.slug).issues());
+              push(paths.workspace(ws.slug).home());
             } else {
               push(paths.root());
             }

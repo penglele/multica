@@ -1401,6 +1401,26 @@ export class ApiClient {
     });
   }
 
+  // ---- BONCML Analysis (P1 stubs; P2 backs with real data) ----------
+
+  async listAnalysisTasks(
+    roomId: string,
+  ): Promise<import("../analysis/types").AnalysisTask[]> {
+    return this.fetch(`/api/channels/${roomId}/analysis-tasks`);
+  }
+
+  async listAnalysisArtifacts(
+    roomId: string,
+  ): Promise<import("../analysis/types").AnalysisArtifact[]> {
+    return this.fetch(`/api/channels/${roomId}/analysis-artifacts`);
+  }
+
+  async listAnalysisAuditEvents(
+    roomId: string,
+  ): Promise<import("../analysis/types").AnalysisAuditEvent[]> {
+    return this.fetch(`/api/channels/${roomId}/analysis-audit-events`);
+  }
+
   async cancelTaskById(taskId: string): Promise<void> {
     await this.fetch(`/api/tasks/${taskId}/cancel`, { method: "POST" });
   }

@@ -580,6 +580,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Get("/replies", h.ListThreadReplies)
 					})
 					r.Post("/read", h.MarkChannelRead)
+
+					// BONCML Workspace P1: stub endpoints so the
+					// TASKS / ARTIFACTS / AUDIT tabs render against
+					// real API responses (currently always empty).
+					// The schema and semantics land in P2; this is the
+					// shape-stable contract the frontend hooks bind to.
+					r.Get("/analysis-tasks", h.ListAnalysisTasks)
+					r.Get("/analysis-artifacts", h.ListAnalysisArtifacts)
+					r.Get("/analysis-audit-events", h.ListAnalysisAuditEvents)
 				})
 			})
 

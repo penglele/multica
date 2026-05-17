@@ -109,13 +109,13 @@ export function WorkspaceRoomPage({ workspaceSlug, roomId }: WorkspaceRoomPagePr
             <ChannelConversation key={roomId} channelId={roomId} density="comfortable" />
           </TabPane>
           <TabPane active={tab === "tasks"}>
-            <WorkspaceTaskView />
+            <WorkspaceTaskView roomId={roomId} />
           </TabPane>
           <TabPane active={tab === "artifacts"}>
-            <WorkspaceArtifactView />
+            <WorkspaceArtifactView roomId={roomId} />
           </TabPane>
           <TabPane active={tab === "audit"}>
-            <WorkspaceAuditView />
+            <WorkspaceAuditView roomId={roomId} />
           </TabPane>
         </div>
       </WorkspaceShell>

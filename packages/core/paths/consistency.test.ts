@@ -32,6 +32,11 @@ describe("paths.workspace() shape", () => {
         // Added when channel-chat-upgrade landed; the page is a list of
         // workspace channels at /<slug>/channels.
         "channels",
+        // Added by BONCML Workspace P1 — these are the new product
+        // home / rooms list (same URL today). `home()` is the alias
+        // call sites use when they mean "default landing".
+        "home",
+        "rooms",
       ]),
     );
   });
@@ -54,6 +59,8 @@ describe("paths.workspace() shape", () => {
       ["squads", "squads"],
       ["settings", "settings"],
       ["channels", "channels"],
+      ["home", "rooms"],
+      ["rooms", "rooms"],
     ];
     const wsAsAny = ws as unknown as Record<string, () => string>;
     for (const [method, segment] of expectedSegments) {

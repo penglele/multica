@@ -29,6 +29,13 @@ const WORKSPACE_ROUTE_SEGMENTS = new Set([
   "runtimes",
   "skills",
   "settings",
+  // P1 BONCML Workspace shell — paths like /rooms/<id> resolve to the
+  // analyst workbench. Note: 'home' isn't a URL segment (it's the
+  // alias method name in paths.ts that emits /<slug>/rooms), so it
+  // doesn't appear here.
+  "rooms",
+  "channels",
+  "squads",
 ]);
 
 /**

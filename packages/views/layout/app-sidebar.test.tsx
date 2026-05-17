@@ -81,12 +81,22 @@ vi.mock("@multica/core/auth", () => ({
   useAuthStore: (selector: (state: { user: { id: string } }) => unknown) => selector({ user: { id: "user-1" } }),
 }));
 vi.mock("@multica/core/paths", () => ({
-  paths: { workspace: (slug: string) => ({ issues: () => `/${slug}/issues` }) },
+  paths: {
+    workspace: (slug: string) => ({
+      issues: () => `/${slug}/issues`,
+      home: () => `/${slug}/rooms`,
+      rooms: () => `/${slug}/rooms`,
+      workspaceRoom: (id: string) => `/${slug}/rooms/${id}`,
+      channelDetail: (id: string) => `/${slug}/channels/${id}`,
+    }),
+  },
   useCurrentWorkspace: () => ({ id: "ws-1", name: "Acme", slug: "acme" }),
   useWorkspacePaths: () => ({
     inbox: () => "/acme/inbox",
     myIssues: () => "/acme/my-issues",
     issues: () => "/acme/issues",
+    home: () => "/acme/rooms",
+    rooms: () => "/acme/rooms",
     projects: () => "/acme/projects",
     autopilots: () => "/acme/autopilots",
     agents: () => "/acme/agents",
@@ -95,8 +105,11 @@ vi.mock("@multica/core/paths", () => ({
     runtimes: () => "/acme/runtimes",
     skills: () => "/acme/skills",
     settings: () => "/acme/settings",
+    channels: () => "/acme/channels",
     issueDetail: (id: string) => `/acme/issues/${id}`,
     projectDetail: (id: string) => `/acme/projects/${id}`,
+    channelDetail: (id: string) => `/acme/channels/${id}`,
+    workspaceRoom: (id: string) => `/acme/rooms/${id}`,
   }),
 }));
 vi.mock("@multica/core/api", async (importOriginal) => ({ ...(await importOriginal<typeof import("@multica/core/api")>()), api: {} }));
@@ -112,6 +125,16 @@ vi.mock("@multica/core/pins/mutations", () => ({ useDeletePin: () => ({ mutate: 
 vi.mock("@multica/core/pins/queries", () => ({ pinListOptions: () => ({ queryKey: ["pins"] }) }));
 vi.mock("@multica/core/projects/queries", () => ({ projectDetailOptions: () => ({ queryKey: ["project"] }) }));
 vi.mock("@multica/core/runtimes/hooks", () => ({ useMyRuntimesNeedUpdate: () => false }));
+vi.mock("@multica/core/channels", () => ({
+  channelListOptions: () => ({ queryKey: ["channels"] }),
+  useDeleteChannel: () => ({ mutate: vi.fn() }),
+}));
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
+}));
+vi.mock("../channels/components/create-channel-dialog", () => ({
+  CreateChannelDialog: () => null,
+}));
 vi.mock("@multica/core/workspace/queries", () => ({
   myInvitationListOptions: () => ({ queryKey: ["invitations"] }),
   workspaceKeys: { myInvitations: () => ["invitations"] },

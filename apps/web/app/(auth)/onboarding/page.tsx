@@ -65,10 +65,10 @@ export default function OnboardingPage() {
         onComplete={(ws) => {
           // No more firstIssueId handoff — the welcome issue is created
           // inside the workspace via StarterContentPrompt, not during
-          // onboarding. Always land on the workspace issues list (or
+          // onboarding. Always land on the BONCML Workspace home (or
           // root if the flow never produced a workspace).
           if (ws) {
-            router.push(paths.workspace(ws.slug).issues());
+            router.push(paths.workspace(ws.slug).home());
           } else {
             router.push(paths.root());
           }
