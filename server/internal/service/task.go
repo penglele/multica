@@ -1772,11 +1772,16 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 		}
 		// Persist the updated status so page refresh shows correct state.
 		s.persistChannelTargetStatus(ctx, task, channelStatus)
+	}
 
-		// P3: write an analysis_audit_event for every channel-task
-		// lifecycle transition so the AUDIT tab shows real agent
-		// activity without waiting for P4 Runtime integration.
-		s.emitAnalysisAuditForChannelTask(ctx, task, channelStatus)
+	// P3/P4: write an analysis_audit_event for every channel-task
+	// lifecycle transition. This fires for ALL channel tasks (whether
+	// or not they have a ChannelMessageID) so BONCML Runner tasks
+	// (which have ChannelID + AnalysisTaskID but no message) still
+	// get audited.
+	if task.ChannelID.Valid {
+		targetStatus := mapTaskStatusToTargetStatus(task.Status, eventType)
+		s.emitAnalysisAuditForChannelTask(ctx, task, targetStatus)
 	}
 }
 
