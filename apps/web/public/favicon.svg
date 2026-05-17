@@ -1,7 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Multica">
-  <rect width="100" height="100" rx="20" fill="#ffffff"/>
-  <polygon
-    fill="#111827"
-    points="45,62.1 45,100 55,100 55,62.1 81.8,88.9 88.9,81.8 62.1,55 100,55 100,45 62.1,45 88.9,18.2 81.8,11.1 55,37.9 55,0 45,0 45,37.9 18.2,11.1 11.1,18.2 37.9,45 0,45 0,55 37.9,55 11.1,81.8 18.2,88.9"
-  />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="BONCML">
+  <rect width="100" height="100" rx="18" fill="#0d9488"/>
+  <path d="M25 70 L25 45 L35 45 L35 70 Z" fill="#ffffff" opacity="0.9"/>
+  <path d="M40 70 L40 35 L50 35 L50 70 Z" fill="#ffffff"/>
+  <path d="M55 70 L55 25 L65 25 L65 70 Z" fill="#ffffff" opacity="0.9"/>
+  <path d="M70 70 L70 40 L80 40 L80 70 Z" fill="#ffffff" opacity="0.8"/>
+  <line x1="20" y1="74" x2="85" y2="74" stroke="#ffffff" stroke-width="2" opacity="0.6"/>
+  <circle cx="30" cy="30" r="3" fill="#ffffff" opacity="0.7"/>
+  <circle cx="45" cy="22" r="2.5" fill="#ffffff" opacity="0.5"/>
+  <path d="M30 30 L45 22 L60 25 L72.5 18" stroke="#ffffff" stroke-width="1.5" fill="none" opacity="0.5" stroke-linecap="round"/>
+  <circle cx="60" cy="25" r="2.5" fill="#ffffff" opacity="0.5"/>
+  <circle cx="72.5" cy="18" r="3" fill="#ffffff" opacity="0.7"/>
 </svg>
