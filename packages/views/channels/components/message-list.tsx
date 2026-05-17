@@ -1,10 +1,14 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Loader2, RotateCw } from "lucide-react";
+import { toast } from "sonner";
+import { Loader2, RotateCw, Copy } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import type { ChannelMessage, ChannelMessageTarget } from "@multica/core/channels";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { Markdown } from "../../common/markdown";
+import { copyMarkdown } from "../../editor";
+import { formatElapsedMs } from "../../chat/lib/format";
 
 interface MessageListProps {
   messages: ChannelMessage[];
@@ -67,11 +71,25 @@ export function MessageList({ messages, currentUserId, onThreadClick, onRetry }:
 
   return (
     <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
-      {messages.map((msg) => {
+      {messages.map((msg, i) => {
         const isOwn = msg.sender_id === currentUserId;
         const isAgent = msg.sender_type === "agent";
         const isSending = msg.delivery_status === "sending";
         const isFailed = msg.delivery_status === "failed";
+
+        // Reply elapsed: distance from the most recent preceding human msg.
+        let replyElapsedMs: number | undefined;
+        if (isAgent) {
+          for (let j = i - 1; j >= 0; j--) {
+            const prev = messages[j];
+            if (prev?.sender_type === "human") {
+              const ms = Date.parse(msg.created_at) - Date.parse(prev.created_at);
+              if (Number.isFinite(ms) && ms >= 0) replyElapsedMs = ms;
+              break;
+            }
+          }
+        }
+
         return (
           <div
             key={msg.id}
@@ -93,11 +111,20 @@ export function MessageList({ messages, currentUserId, onThreadClick, onRetry }:
                 <span className="text-[10px] text-muted-foreground">
                   {isSending ? "发送中…" : formatTime(msg.created_at)}
                 </span>
+                {isAgent && replyElapsedMs !== undefined && replyElapsedMs > 0 && (
+                  <span className="text-[10px] text-muted-foreground/70">
+                    · {formatElapsedMs(replyElapsedMs)}
+                  </span>
+                )}
                 {isFailed && (
                   <span className="text-[10px] text-destructive font-medium">发送失败</span>
                 )}
               </div>
-              <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+              {/* Markdown rendering matches main chat: code, lists, links,
+                  mentions all work the same way. */}
+              <div className="text-sm break-words">
+                <Markdown>{msg.content}</Markdown>
+              </div>
               {isFailed && msg.error_message && (
                 <p className="mt-0.5 text-[10px] text-destructive">{msg.error_message}</p>
               )}
@@ -112,10 +139,31 @@ export function MessageList({ messages, currentUserId, onThreadClick, onRetry }:
               {msg.targets && msg.targets.length > 0 && (
                 <TargetsFooter targets={msg.targets} />
               )}
+            </div>
+            {/* Hover toolbar: copy + reply. Mirrors ChannelDetailPage's
+                MessageRow so users get the same affordances regardless of
+                which entry point they're using. */}
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 flex flex-col items-end gap-0.5 mt-0.5">
+              {!isSending && !isFailed && (
+                <button
+                  onClick={async () => {
+                    try {
+                      await copyMarkdown(msg.content);
+                      toast.success("已复制");
+                    } catch {
+                      toast.error("复制失败");
+                    }
+                  }}
+                  className="text-[10px] text-muted-foreground hover:text-foreground"
+                  title="复制"
+                >
+                  <Copy className="size-2.5" />
+                </button>
+              )}
               {onThreadClick && !isSending && !isFailed && (
                 <button
                   onClick={() => onThreadClick(msg.id)}
-                  className="text-[10px] text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity mt-0.5"
+                  className="text-[10px] text-muted-foreground hover:text-foreground"
                 >
                   回复
                 </button>

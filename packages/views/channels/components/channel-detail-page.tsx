@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Hash, Lock, Settings, Users, X, ChevronRight, ChevronDown, Send, RotateCw, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { Hash, Lock, Settings, Users, X, ChevronRight, ChevronDown, Send, RotateCw, Loader2, Copy } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
@@ -10,6 +11,9 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
 import { useWSScopeSubscription } from "@multica/core/realtime";
 import { PageHeader } from "../../layout/page-header";
+import { Markdown } from "../../common/markdown";
+import { copyMarkdown } from "../../editor";
+import { formatElapsedMs } from "../../chat/lib/format";
 import {
   channelDetailOptions,
   channelMessagesOptions,
@@ -242,18 +246,37 @@ function MessageFeed({
           </button>
         </div>
       )}
-      {messages.map((msg) => (
-        <MessageRow
-          key={msg.id}
-          msg={msg}
-          currentUserId={currentUserId}
-          onThreadClick={onThreadClick}
-          isThreadActive={activeThreadId === msg.id}
-          agents={agents}
-          wsMembers={wsMembers}
-          onRetry={onRetry}
-        />
-      ))}
+      {messages.map((msg, i) => {
+        // For agent messages: distance from the most-recent human message
+        // before this one in the same channel feed. Used to render a small
+        // "回复耗时" pill so users get the same elapsed-time signal main chat
+        // gives them. Skips when there's no preceding human (e.g. agent-first
+        // turn, or filtered into a thread view).
+        let replyElapsedMs: number | undefined;
+        if (msg.sender_type === "agent") {
+          for (let j = i - 1; j >= 0; j--) {
+            const prev = messages[j];
+            if (prev?.sender_type === "human") {
+              const ms = Date.parse(msg.created_at) - Date.parse(prev.created_at);
+              if (Number.isFinite(ms) && ms >= 0) replyElapsedMs = ms;
+              break;
+            }
+          }
+        }
+        return (
+          <MessageRow
+            key={msg.id}
+            msg={msg}
+            currentUserId={currentUserId}
+            onThreadClick={onThreadClick}
+            isThreadActive={activeThreadId === msg.id}
+            agents={agents}
+            wsMembers={wsMembers}
+            onRetry={onRetry}
+            replyElapsedMs={replyElapsedMs}
+          />
+        );
+      })}
       <div ref={bottomRef} />
     </div>
   );
@@ -267,6 +290,7 @@ function MessageRow({
   agents = [],
   wsMembers = [],
   onRetry,
+  replyElapsedMs,
 }: {
   msg: ChannelMessage;
   currentUserId?: string;
@@ -275,6 +299,7 @@ function MessageRow({
   agents?: import("@multica/core/types").Agent[];
   wsMembers?: import("@multica/core/types").MemberWithUser[];
   onRetry?: (msg: ChannelMessage) => void;
+  replyElapsedMs?: number;
 }) {
   const isAgent = msg.sender_type === "agent";
 
@@ -315,11 +340,25 @@ function MessageRow({
           <span className="text-[10px] text-muted-foreground">
             {isSending ? "发送中…" : new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </span>
+          {/* Reply-elapsed pill — main chat shows this on assistant messages
+              after a turn; we surface the same signal on agent messages in
+              channels so users can see how long the agent took. */}
+          {isAgent && replyElapsedMs !== undefined && replyElapsedMs > 0 && (
+            <span className="text-[10px] text-muted-foreground/70">
+              · {formatElapsedMs(replyElapsedMs)}
+            </span>
+          )}
           {isFailed && (
             <span className="text-[10px] text-destructive font-medium">发送失败</span>
           )}
         </div>
-        <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
+        {/* Render Markdown for both human and agent messages so code fences,
+            lists, links, and @mentions all match main chat. The whitespace
+            handling inside Markdown already preserves paragraph breaks; we
+            don't want the old <p>'s pre-wrap because it disables markdown. */}
+        <div className="text-sm break-words">
+          <Markdown>{msg.content}</Markdown>
+        </div>
         {isFailed && msg.error_message && (
           <p className="mt-0.5 text-[11px] text-destructive">{msg.error_message}</p>
         )}
@@ -333,14 +372,35 @@ function MessageRow({
         )}
         {msg.targets && msg.targets.length > 0 && <MessageTargetsFooter targets={msg.targets} />}
       </div>
-      {/* Reply button on hover */}
-      <button
-        onClick={() => onThreadClick(msg.id)}
-        className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-0.5 mt-1"
-      >
-        <ChevronRight className="size-3" />
-        回复
-      </button>
+      {/* Hover toolbar: copy + reply.
+          Hidden by default; reveals on row hover. The buttons sit in a
+          single column so they line up with the avatar regardless of how
+          tall the message body is. */}
+      <div className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 flex flex-col items-end gap-0.5 mt-1">
+        {!isSending && !isFailed && (
+          <button
+            onClick={async () => {
+              try {
+                await copyMarkdown(msg.content);
+                toast.success("已复制");
+              } catch {
+                toast.error("复制失败");
+              }
+            }}
+            className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-0.5"
+            title="复制"
+          >
+            <Copy className="size-3" />
+          </button>
+        )}
+        <button
+          onClick={() => onThreadClick(msg.id)}
+          className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-0.5"
+        >
+          <ChevronRight className="size-3" />
+          回复
+        </button>
+      </div>
     </div>
   );
 }
