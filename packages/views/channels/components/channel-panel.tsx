@@ -1,44 +1,39 @@
 "use client";
 
+// ChannelPanel is the side-panel shell for a channel — a 360px column that
+// docks to the right of the workspace. The conversation body itself lives
+// in ChannelConversation, shared with ChannelDetailPage; this file only
+// owns:
+//   - panel chrome (back / close / new-channel buttons)
+//   - the channel list shown when no channel is selected
+//   - the auto-reply quick toggle
+// Behavior changes belong in channel-conversation.tsx; modify here only
+// for panel-specific affordances.
+
 import { useQuery } from "@tanstack/react-query";
 import { Hash, Plus, X, ChevronLeft, Settings } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useAuthStore } from "@multica/core/auth";
-import { useWSScopeSubscription } from "@multica/core/realtime";
 import {
   channelListOptions,
-  channelMessagesOptions,
   useChannelStore,
-  useSendChannelMessage,
   useCreateChannel,
   useUpdateChannel,
 } from "@multica/core/channels";
-import { MessageList } from "./message-list";
-import { MessageInput } from "./message-input";
+import { ChannelConversation } from "./channel-conversation";
 
 export function ChannelPanel() {
   const wsId = useWorkspaceId();
-  const user = useAuthStore((s) => s.user);
   const isOpen = useChannelStore((s) => s.isOpen);
   const activeChannelId = useChannelStore((s) => s.activeChannelId);
-  const openThreadId = useChannelStore((s) => s.openThreadId);
   const setActiveChannel = useChannelStore((s) => s.setActiveChannel);
   const setOpen = useChannelStore((s) => s.setOpen);
-  const closeThread = useChannelStore((s) => s.closeThread);
 
   const { data: channels = [] } = useQuery(channelListOptions(wsId));
-  const { data: messages = [] } = useQuery(
-    channelMessagesOptions(activeChannelId ?? ""),
-  );
-
-  const sendMessage = useSendChannelMessage();
   const createChannel = useCreateChannel();
 
   const activeChannel = channels.find((c) => c.id === activeChannelId);
-
-  useWSScopeSubscription("channel", activeChannelId);
 
   if (!isOpen) return null;
 
@@ -100,53 +95,7 @@ export function ChannelPanel() {
 
       {/* Body */}
       {activeChannel ? (
-        <div className="flex flex-col flex-1 min-h-0">
-          {openThreadId ? (
-            <div className="flex flex-col flex-1 min-h-0">
-              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border text-xs text-muted-foreground">
-                <Button variant="ghost" size="icon" className="size-5" onClick={closeThread}>
-                  <ChevronLeft className="size-3" />
-                </Button>
-                Thread
-              </div>
-              <ThreadView parentId={openThreadId} userId={user?.id} />
-            </div>
-          ) : (
-            <>
-              <MessageList
-                messages={messages}
-                currentUserId={user?.id}
-                onThreadClick={(id) => useChannelStore.getState().openThread(id)}
-                onRetry={(failed) => {
-                  if (!failed.client_message_id) return;
-                  sendMessage.mutate({
-                    channelId: failed.channel_id,
-                    content: failed.content,
-                    threadParentId: failed.thread_parent_id,
-                    clientMessageId: failed.client_message_id,
-                    senderId: user?.id,
-                  });
-                }}
-              />
-              <MessageInput
-                onSend={(content) =>
-                  sendMessage.mutate({
-                    channelId: activeChannel.id,
-                    content,
-                    // Mint a per-send id so optimistic insert + idempotent retry
-                    // both work in this simpler panel. Each send is its own draft.
-                    clientMessageId:
-                      typeof crypto !== "undefined" && "randomUUID" in crypto
-                        ? crypto.randomUUID()
-                        : `cid-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-                    senderId: user?.id,
-                  })
-                }
-                disabled={sendMessage.isPending}
-              />
-            </>
-          )}
-        </div>
+        <ChannelConversation key={activeChannel.id} channelId={activeChannel.id} density="compact" />
       ) : (
         <ChannelList channels={channels} onSelect={setActiveChannel} />
       )}
@@ -185,52 +134,6 @@ function ChannelList({
         </button>
       ))}
     </div>
-  );
-}
-
-function ThreadView({ parentId, userId }: { parentId: string; userId?: string }) {
-  const { data: replies = [] } = useQuery({
-    queryKey: ["channel-thread", parentId],
-    queryFn: () => import("@multica/core/api").then((m) => m.api.listThreadReplies(parentId)),
-    enabled: !!parentId,
-    staleTime: Infinity,
-  });
-  const sendMessage = useSendChannelMessage();
-  const channelId = replies[0]?.channel_id ?? "";
-
-  return (
-    <>
-      <MessageList
-        messages={replies}
-        currentUserId={userId}
-        onRetry={(failed) => {
-          if (!failed.client_message_id) return;
-          sendMessage.mutate({
-            channelId: failed.channel_id,
-            content: failed.content,
-            threadParentId: failed.thread_parent_id,
-            clientMessageId: failed.client_message_id,
-            senderId: userId,
-          });
-        }}
-      />
-      <MessageInput
-        onSend={(content) =>
-          sendMessage.mutate({
-            channelId,
-            content,
-            threadParentId: parentId,
-            clientMessageId:
-              typeof crypto !== "undefined" && "randomUUID" in crypto
-                ? crypto.randomUUID()
-                : `cid-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            senderId: userId,
-          })
-        }
-        disabled={sendMessage.isPending || !channelId}
-        placeholder="回复..."
-      />
-    </>
   );
 }
 
