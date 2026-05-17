@@ -814,22 +814,25 @@ export function useRealtimeSync(
     // Channel events
     const unsubChannelMessage = ws.on("channel:message", (p) => {
       const msg = p as import("../channels/types").ChannelMessage;
-      // Append to messages cache.
+      // Replace any sending/failed placeholder with the same client_message_id,
+      // and dedup on real id. Without the placeholder swap, the WS event can
+      // beat the mutation's onSuccess and leave a duplicate row in the cache.
+      const merge = (old: import("../channels/types").ChannelMessage[] = []) => {
+        const filtered = old.filter((m) => {
+          if (m.id === msg.id) return false; // dedup real message
+          if (msg.client_message_id && m.client_message_id === msg.client_message_id) return false; // drop placeholder
+          return true;
+        });
+        return [...filtered, { ...msg, delivery_status: "sent" as const }];
+      };
       qc.setQueryData<import("../channels/types").ChannelMessage[]>(
         ["channel-messages", msg.channel_id],
-        (old = []) => {
-          if (old.some((m) => m.id === msg.id)) return old;
-          return [...old, msg];
-        },
+        (old = []) => merge(old),
       );
-      // If it's a thread reply, also update thread cache.
       if (msg.thread_parent_id) {
         qc.setQueryData<import("../channels/types").ChannelMessage[]>(
           ["channel-thread", msg.thread_parent_id],
-          (old = []) => {
-            if (old.some((m) => m.id === msg.id)) return old;
-            return [...old, msg];
-          },
+          (old = []) => merge(old),
         );
       }
     });

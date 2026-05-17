@@ -39,6 +39,24 @@ export function useDeleteChannel() {
   });
 }
 
+// Stable placeholder seq value — keep it large enough to sort to the bottom
+// of any reasonable real-message list, but not so large that it overflows.
+// Server seqs start at 1 and increment monotonically; 2^53-1 is safely past
+// anything we'd see in production.
+const PLACEHOLDER_SEQ = Number.MAX_SAFE_INTEGER;
+
+export interface SendChannelMessageVars {
+  channelId: string;
+  content: string;
+  threadParentId?: string;
+  triggerMode?: "none" | "manual" | "auto";
+  targets?: { kind: "agent"; id: string }[];
+  clientMessageId?: string;
+  /** Sender's user id — used to render the optimistic placeholder under
+   *  the right author. The mutation reads it but doesn't change it. */
+  senderId?: string;
+}
+
 export function useSendChannelMessage() {
   const qc = useQueryClient();
   return useMutation({
@@ -49,14 +67,7 @@ export function useSendChannelMessage() {
       triggerMode,
       targets,
       clientMessageId,
-    }: {
-      channelId: string;
-      content: string;
-      threadParentId?: string;
-      triggerMode?: "none" | "manual" | "auto";
-      targets?: { kind: "agent"; id: string }[];
-      clientMessageId?: string;
-    }) =>
+    }: SendChannelMessageVars) =>
       api.sendChannelMessage(channelId, {
         content,
         thread_parent_id: threadParentId,
@@ -64,19 +75,71 @@ export function useSendChannelMessage() {
         targets,
         client_message_id: clientMessageId,
       }),
-    onSuccess: (msg: ChannelMessage) => {
-      // Append to cache, deduping on id — the WS channel:message event will
-      // also fire (we broadcast on send), so without this guard we'd insert
-      // the same message twice.
-      qc.setQueryData<ChannelMessage[]>(channelKeys.messages(msg.channel_id), (old = []) => {
-        if (old.some((m) => m.id === msg.id)) return old;
-        return [...old, msg];
-      });
+    // Optimistic insert: drop a sending-state placeholder into the cache
+    // the instant the user clicks send, so they see their message before
+    // the server roundtrip completes. Keyed by client_message_id so retries
+    // hit the same row.
+    onMutate: async (vars) => {
+      if (!vars.clientMessageId) return;
+      const placeholder: ChannelMessage = {
+        id: `pending:${vars.clientMessageId}`,
+        channel_id: vars.channelId,
+        sender_id: vars.senderId ?? "",
+        sender_type: "human",
+        content: vars.content,
+        seq: PLACEHOLDER_SEQ,
+        thread_parent_id: vars.threadParentId,
+        client_message_id: vars.clientMessageId,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        targets: [],
+        delivery_status: "sending",
+      };
+      const upsert = (old: ChannelMessage[] = []) => {
+        // If a previous attempt left a failed placeholder behind, replace it
+        // (so retry re-uses the same slot). Otherwise append.
+        const existing = old.findIndex((m) => m.client_message_id === vars.clientMessageId);
+        if (existing >= 0) {
+          const next = old.slice();
+          next[existing] = placeholder;
+          return next;
+        }
+        return [...old, placeholder];
+      };
+      qc.setQueryData<ChannelMessage[]>(channelKeys.messages(vars.channelId), (old = []) => upsert(old));
+      if (vars.threadParentId) {
+        qc.setQueryData<ChannelMessage[]>(channelKeys.thread(vars.threadParentId), (old = []) => upsert(old));
+      }
+    },
+    onSuccess: (msg: ChannelMessage, vars) => {
+      // Swap the placeholder for the server row. Match by client_message_id;
+      // dedup by id so the parallel WS channel:message event doesn't insert
+      // a third copy.
+      const real: ChannelMessage = { ...msg, delivery_status: "sent" };
+      const replace = (old: ChannelMessage[] = []) => {
+        const filtered = old.filter(
+          (m) =>
+            m.id !== `pending:${vars.clientMessageId}` &&
+            m.id !== msg.id,
+        );
+        return [...filtered, real];
+      };
+      qc.setQueryData<ChannelMessage[]>(channelKeys.messages(msg.channel_id), (old = []) => replace(old));
       if (msg.thread_parent_id) {
-        qc.setQueryData<ChannelMessage[]>(channelKeys.thread(msg.thread_parent_id), (old = []) => {
-          if (old.some((m) => m.id === msg.id)) return old;
-          return [...old, msg];
+        qc.setQueryData<ChannelMessage[]>(channelKeys.thread(msg.thread_parent_id), (old = []) => replace(old));
+      }
+    },
+    onError: (err, vars) => {
+      if (!vars.clientMessageId) return;
+      const message = err instanceof Error ? err.message : String(err);
+      const markFailed = (old: ChannelMessage[] = []) =>
+        old.map((m) => {
+          if (m.id !== `pending:${vars.clientMessageId}`) return m;
+          return { ...m, delivery_status: "failed" as const, error_message: message };
         });
+      qc.setQueryData<ChannelMessage[]>(channelKeys.messages(vars.channelId), (old = []) => markFailed(old));
+      if (vars.threadParentId) {
+        qc.setQueryData<ChannelMessage[]>(channelKeys.thread(vars.threadParentId), (old = []) => markFailed(old));
       }
     },
   });

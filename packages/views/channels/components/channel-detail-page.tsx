@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Hash, Lock, Settings, Users, X, ChevronRight, ChevronDown, Send } from "lucide-react";
+import { Hash, Lock, Settings, Users, X, ChevronRight, ChevronDown, Send, RotateCw, Loader2 } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
@@ -97,6 +97,18 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
             activeThreadId={openThreadId}
             agents={agents}
             wsMembers={wsMembers}
+            onRetry={(failed) => {
+              if (!failed.client_message_id) return;
+              // Retry with the same client_message_id so the server's unique
+              // index dedups in case the previous attempt actually committed.
+              sendMessage.mutate({
+                channelId: failed.channel_id,
+                content: failed.content,
+                threadParentId: failed.thread_parent_id,
+                clientMessageId: failed.client_message_id,
+                senderId: user?.id,
+              });
+            }}
           />
           <MessageComposer
             onSend={async (content, opts) =>
@@ -106,6 +118,7 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
                 triggerMode: opts?.triggerMode,
                 targets: opts?.targets,
                 clientMessageId: opts?.clientMessageId,
+                senderId: user?.id,
               })
             }
             disabled={sendMessage.isPending}
@@ -144,6 +157,7 @@ function MessageFeed({
   activeThreadId,
   agents = [],
   wsMembers = [],
+  onRetry,
 }: {
   messages: ChannelMessage[];
   currentUserId?: string;
@@ -151,6 +165,7 @@ function MessageFeed({
   activeThreadId: string | null;
   agents?: import("@multica/core/types").Agent[];
   wsMembers?: import("@multica/core/types").MemberWithUser[];
+  onRetry?: (msg: ChannelMessage) => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -177,6 +192,7 @@ function MessageFeed({
           isThreadActive={activeThreadId === msg.id}
           agents={agents}
           wsMembers={wsMembers}
+          onRetry={onRetry}
         />
       ))}
       <div ref={bottomRef} />
@@ -191,6 +207,7 @@ function MessageRow({
   isThreadActive,
   agents = [],
   wsMembers = [],
+  onRetry,
 }: {
   msg: ChannelMessage;
   currentUserId?: string;
@@ -198,6 +215,7 @@ function MessageRow({
   isThreadActive: boolean;
   agents?: import("@multica/core/types").Agent[];
   wsMembers?: import("@multica/core/types").MemberWithUser[];
+  onRetry?: (msg: ChannelMessage) => void;
 }) {
   const isAgent = msg.sender_type === "agent";
 
@@ -213,11 +231,16 @@ function MessageRow({
     displayName = member?.name ?? msg.sender_id.slice(0, 8);
   }
 
+  const isSending = msg.delivery_status === "sending";
+  const isFailed = msg.delivery_status === "failed";
+
   return (
     <div
       className={cn(
         "group flex items-start gap-3 px-2 py-1.5 rounded-lg hover:bg-muted/40 transition-colors",
         isThreadActive && "bg-muted/60",
+        isSending && "opacity-60",
+        isFailed && "bg-destructive/5",
       )}
     >
       <ActorAvatar
@@ -231,10 +254,24 @@ function MessageRow({
             {displayName}
           </span>
           <span className="text-[10px] text-muted-foreground">
-            {new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            {isSending ? "发送中…" : new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </span>
+          {isFailed && (
+            <span className="text-[10px] text-destructive font-medium">发送失败</span>
+          )}
         </div>
         <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
+        {isFailed && msg.error_message && (
+          <p className="mt-0.5 text-[11px] text-destructive">{msg.error_message}</p>
+        )}
+        {isFailed && onRetry && (
+          <button
+            onClick={() => onRetry(msg)}
+            className="mt-1 inline-flex items-center gap-1 text-[11px] text-destructive hover:text-destructive/80 underline-offset-2 hover:underline"
+          >
+            <RotateCw className="size-3" /> 重试
+          </button>
+        )}
         {msg.targets && msg.targets.length > 0 && <MessageTargetsFooter targets={msg.targets} />}
       </div>
       {/* Reply button on hover */}
@@ -279,10 +316,12 @@ function MessageTargetsFooter({ targets }: { targets: import("@multica/core/chan
       <span>已交给</span>
       {targets.map((t, i) => {
         const lbl = statusLabel(t.status);
+        const isRunning = t.status === "running";
         return (
           <span key={`${t.kind}:${t.id}`} className="inline-flex items-center gap-1">
             <span className="font-medium text-foreground/80">@{t.name}</span>
-            <span className={cn("px-1 py-px rounded text-[10px]", lbl.className)}>
+            <span className={cn("inline-flex items-center gap-0.5 px-1 py-px rounded text-[10px]", lbl.className)}>
+              {isRunning && <Loader2 className="size-2.5 animate-spin" />}
               {lbl.text}
             </span>
             {i < targets.length - 1 && <span>·</span>}
@@ -564,6 +603,16 @@ function ThreadPanel({
             isThreadActive={false}
             agents={agents}
             wsMembers={wsMembers}
+            onRetry={(failed) => {
+              if (!failed.client_message_id) return;
+              sendMessage.mutate({
+                channelId: failed.channel_id,
+                content: failed.content,
+                threadParentId: failed.thread_parent_id,
+                clientMessageId: failed.client_message_id,
+                senderId: currentUserId,
+              });
+            }}
           />
         ))}
         {replies.length === 0 && (
@@ -579,6 +628,7 @@ function ThreadPanel({
             triggerMode: opts?.triggerMode,
             targets: opts?.targets,
             clientMessageId: opts?.clientMessageId,
+            senderId: currentUserId,
           })
         }
         disabled={sendMessage.isPending}

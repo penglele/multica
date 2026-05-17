@@ -41,6 +41,14 @@ export interface ChannelMessage {
   updated_at: string;
   /** B0 minimal feedback: who this message was routed to, and their current status. */
   targets?: ChannelMessageTarget[];
+  /**
+   * C1 client-only state. Server never writes this — it's a UI overlay so we
+   * can render optimistic / failed / retrying states between user click and
+   * server ack. Default for messages loaded from the server is "sent".
+   */
+  delivery_status?: "sending" | "sent" | "failed";
+  /** Set when delivery_status === "failed"; surface as a tooltip / inline note. */
+  error_message?: string;
 }
 
 export interface ChannelTargetUpdatePayload {

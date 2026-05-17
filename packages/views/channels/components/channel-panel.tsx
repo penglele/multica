@@ -117,10 +117,30 @@ export function ChannelPanel() {
                 messages={messages}
                 currentUserId={user?.id}
                 onThreadClick={(id) => useChannelStore.getState().openThread(id)}
+                onRetry={(failed) => {
+                  if (!failed.client_message_id) return;
+                  sendMessage.mutate({
+                    channelId: failed.channel_id,
+                    content: failed.content,
+                    threadParentId: failed.thread_parent_id,
+                    clientMessageId: failed.client_message_id,
+                    senderId: user?.id,
+                  });
+                }}
               />
               <MessageInput
                 onSend={(content) =>
-                  sendMessage.mutate({ channelId: activeChannel.id, content })
+                  sendMessage.mutate({
+                    channelId: activeChannel.id,
+                    content,
+                    // Mint a per-send id so optimistic insert + idempotent retry
+                    // both work in this simpler panel. Each send is its own draft.
+                    clientMessageId:
+                      typeof crypto !== "undefined" && "randomUUID" in crypto
+                        ? crypto.randomUUID()
+                        : `cid-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                    senderId: user?.id,
+                  })
                 }
                 disabled={sendMessage.isPending}
               />
@@ -180,10 +200,32 @@ function ThreadView({ parentId, userId }: { parentId: string; userId?: string })
 
   return (
     <>
-      <MessageList messages={replies} currentUserId={userId} />
+      <MessageList
+        messages={replies}
+        currentUserId={userId}
+        onRetry={(failed) => {
+          if (!failed.client_message_id) return;
+          sendMessage.mutate({
+            channelId: failed.channel_id,
+            content: failed.content,
+            threadParentId: failed.thread_parent_id,
+            clientMessageId: failed.client_message_id,
+            senderId: userId,
+          });
+        }}
+      />
       <MessageInput
         onSend={(content) =>
-          sendMessage.mutate({ channelId, content, threadParentId: parentId })
+          sendMessage.mutate({
+            channelId,
+            content,
+            threadParentId: parentId,
+            clientMessageId:
+              typeof crypto !== "undefined" && "randomUUID" in crypto
+                ? crypto.randomUUID()
+                : `cid-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            senderId: userId,
+          })
         }
         disabled={sendMessage.isPending || !channelId}
         placeholder="回复..."
