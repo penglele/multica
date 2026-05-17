@@ -20,7 +20,7 @@ import {
 } from "@multica/core/channels";
 import type { ChannelMessage } from "@multica/core/channels";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { agentListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 
 import { ChannelMembersDialog } from "./channel-members-dialog";
 
@@ -37,6 +37,8 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
   const { data: channel } = useQuery(channelDetailOptions(wsId, channelId));
   const { data: messages = [] } = useQuery(channelMessagesOptions(channelId));
   const { data: members = [] } = useQuery(channelMembersOptions(channelId));
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: wsMembers = [] } = useQuery(memberListOptions(wsId));
 
   const sendMessage = useSendChannelMessage();
   const updateChannel = useUpdateChannel();
@@ -93,6 +95,8 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
             currentUserId={user?.id}
             onThreadClick={setOpenThreadId}
             activeThreadId={openThreadId}
+            agents={agents}
+            wsMembers={wsMembers}
           />
           <MessageComposer
             onSend={(content) =>
@@ -108,6 +112,8 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
             channelId={channel.id}
             currentUserId={user?.id}
             onClose={() => setOpenThreadId(null)}
+            agents={agents}
+            wsMembers={wsMembers}
           />
         )}
       </div>
@@ -130,11 +136,15 @@ function MessageFeed({
   currentUserId,
   onThreadClick,
   activeThreadId,
+  agents = [],
+  wsMembers = [],
 }: {
   messages: ChannelMessage[];
   currentUserId?: string;
   onThreadClick: (id: string) => void;
   activeThreadId: string | null;
+  agents?: import("@multica/core/types").Agent[];
+  wsMembers?: import("@multica/core/types").MemberWithUser[];
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -159,6 +169,8 @@ function MessageFeed({
           currentUserId={currentUserId}
           onThreadClick={onThreadClick}
           isThreadActive={activeThreadId === msg.id}
+          agents={agents}
+          wsMembers={wsMembers}
         />
       ))}
       <div ref={bottomRef} />
@@ -171,13 +183,29 @@ function MessageRow({
   currentUserId,
   onThreadClick,
   isThreadActive,
+  agents = [],
+  wsMembers = [],
 }: {
   msg: ChannelMessage;
   currentUserId?: string;
   onThreadClick: (id: string) => void;
   isThreadActive: boolean;
+  agents?: import("@multica/core/types").Agent[];
+  wsMembers?: import("@multica/core/types").MemberWithUser[];
 }) {
   const isAgent = msg.sender_type === "agent";
+
+  // Resolve display name
+  let displayName = "Unknown";
+  if (isAgent) {
+    const agent = agents.find((a) => a.id === msg.sender_id);
+    displayName = agent?.name ?? msg.sender_id.slice(0, 8);
+  } else if (msg.sender_id === currentUserId) {
+    displayName = "You";
+  } else {
+    const member = wsMembers.find((m) => m.user_id === msg.sender_id);
+    displayName = member?.name ?? msg.sender_id.slice(0, 8);
+  }
 
   return (
     <div
@@ -194,7 +222,7 @@ function MessageRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
           <span className={cn("text-sm font-medium", isAgent && "text-brand")}>
-            {isAgent ? "Agent" : msg.sender_id === currentUserId ? "You" : "Member"}
+            {displayName}
           </span>
           <span className="text-[10px] text-muted-foreground">
             {new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -328,11 +356,15 @@ function ThreadPanel({
   channelId,
   currentUserId,
   onClose,
+  agents = [],
+  wsMembers = [],
 }: {
   parentId: string;
   channelId: string;
   currentUserId?: string;
   onClose: () => void;
+  agents?: import("@multica/core/types").Agent[];
+  wsMembers?: import("@multica/core/types").MemberWithUser[];
 }) {
   const { data: replies = [] } = useQuery(channelThreadOptions(parentId));
   const sendMessage = useSendChannelMessage();
@@ -351,8 +383,10 @@ function ThreadPanel({
             key={msg.id}
             msg={msg}
             currentUserId={currentUserId}
-            onThreadClick={() => {}} // no nested threads
+            onThreadClick={() => {}}
             isThreadActive={false}
+            agents={agents}
+            wsMembers={wsMembers}
           />
         ))}
         {replies.length === 0 && (
