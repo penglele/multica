@@ -1371,10 +1371,13 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/messages${qs}`);
   }
 
-  async sendChannelMessage(channelId: string, content: string, threadParentId?: string): Promise<import("../channels/types").ChannelMessage> {
+  async sendChannelMessage(
+    channelId: string,
+    body: import("../channels/types").SendChannelMessageRequest,
+  ): Promise<import("../channels/types").ChannelMessage> {
     return this.fetch(`/api/channels/${channelId}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content, thread_parent_id: threadParentId }),
+      body: JSON.stringify(body),
     });
   }
 

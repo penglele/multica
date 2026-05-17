@@ -299,9 +299,24 @@ type ChannelMessageTarget struct {
 	Status string `json:"status"` // "queued" | "running" | "completed" | "failed" | "cancelled"
 }
 
+// SendChannelMessageTargetSpec is the structured target a client sends in
+// the request when trigger_mode="manual". Only kind and id are required —
+// the server resolves name and validates membership.
+type SendChannelMessageTargetSpec struct {
+	Kind string `json:"kind"` // "agent"
+	ID   string `json:"id"`
+}
+
 type sendChannelMessageRequest struct {
 	Content        string  `json:"content"`
 	ThreadParentID *string `json:"thread_parent_id"`
+
+	// B1 structured trigger fields. All optional — when none are provided
+	// the server falls back to the B0 path (auto_reply flag + @mention parse)
+	// so older clients keep working unchanged.
+	ClientMessageID *string                        `json:"client_message_id,omitempty"`
+	TriggerMode     *string                        `json:"trigger_mode,omitempty"` // "none" | "manual" | "auto"
+	Targets         []SendChannelMessageTargetSpec `json:"targets,omitempty"`
 }
 
 func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
@@ -334,24 +349,40 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		threadParentID = tid
 	}
 
+	// B1 idempotency: if client_message_id is set and we've already accepted
+	// this message, return the existing row. Avoids creating duplicates on
+	// network retries.
+	var clientMessageID pgtype.Text
+	if req.ClientMessageID != nil && *req.ClientMessageID != "" {
+		clientMessageID = pgtype.Text{String: *req.ClientMessageID, Valid: true}
+		existing, err := h.Queries.GetChannelMessageByClientID(r.Context(), db.GetChannelMessageByClientIDParams{
+			ChannelID:       channelID,
+			ClientMessageID: clientMessageID,
+		})
+		if err == nil {
+			writeJSON(w, http.StatusOK, channelMessageToResponse(existing))
+			return
+		}
+	}
+
 	msg, err := h.Queries.CreateChannelMessage(r.Context(), db.CreateChannelMessageParams{
-		ChannelID:      channelID,
-		SenderID:       parseUUID(userID),
-		SenderType:     "human",
-		Content:        req.Content,
-		ThreadParentID: threadParentID,
-		Targets:        []byte("[]"),
+		ChannelID:       channelID,
+		SenderID:        parseUUID(userID),
+		SenderType:      "human",
+		Content:         req.Content,
+		ThreadParentID:  threadParentID,
+		Targets:         []byte("[]"),
+		ClientMessageID: clientMessageID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to send message")
 		return
 	}
 
-	// B0: Resolve targets synchronously so the response can tell the user
-	// immediately who their message was routed to. Loop prevention and
-	// channel-archived guards are checked here too — we want to fail fast
-	// rather than enqueue tasks that will be cancelled.
-	targets := h.resolveChannelTargets(r.Context(), channelID, msg)
+	// B1: Resolve targets — structured request fields take precedence over
+	// the old @mention/auto_reply fallback. resolveChannelTargets reads
+	// req.TriggerMode and req.Targets when present; falls back otherwise.
+	targets := h.resolveChannelTargets(r.Context(), channelID, msg, req.TriggerMode, req.Targets)
 
 	// Persist targets on the message so they survive page refresh.
 	if len(targets) > 0 {
@@ -532,15 +563,35 @@ func isMentionBoundary(rest string) bool {
 	return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
 }
 
+// channelAgentRow is a slim view of an agent — used internally during target
+// resolution so we don't pass full db.Agent rows around.
+type channelAgentRow struct {
+	id   pgtype.UUID
+	name string
+}
+
 // resolveChannelTargets decides which agents should respond to a message.
 // Returns a list of ChannelMessageTarget with status="queued" — these are
 // the agents that WILL be enqueued. Loop prevention and channel state are
 // checked here, so an empty result means "no one responds" (not an error).
 //
-// B0 implementation: still uses the existing @mention parser + auto_reply
-// channel flag. Phase B1 will add structured `trigger_mode + targets` from
-// the request body; this function will then prefer those when present.
-func (h *Handler) resolveChannelTargets(ctx context.Context, channelID pgtype.UUID, msg db.ChannelMessage) []ChannelMessageTarget {
+// B1 priority order:
+//
+//  1. If the request body specified `trigger_mode`, use it as the source of
+//     truth (`none` → no targets, `manual` → request `targets`, `auto` →
+//     all agent members).
+//  2. Otherwise (older clients or unset), fall back to the B0 implicit
+//     behaviour: `@name` parse + channel.auto_reply flag.
+//
+// `triggerMode` and `requestedTargets` come straight from the request body.
+// They are nil/empty for legacy clients.
+func (h *Handler) resolveChannelTargets(
+	ctx context.Context,
+	channelID pgtype.UUID,
+	msg db.ChannelMessage,
+	triggerMode *string,
+	requestedTargets []SendChannelMessageTargetSpec,
+) []ChannelMessageTarget {
 	ch, err := h.Queries.GetChannel(ctx, channelID)
 	if err != nil {
 		return nil
@@ -567,64 +618,121 @@ func (h *Handler) resolveChannelTargets(ctx context.Context, channelID pgtype.UU
 		return nil
 	}
 
-	// Load agent members of this channel.
+	// Load agent members of this channel — needed for both paths to
+	// validate target IDs and look up display names.
 	agentMemberIDs, err := h.Queries.ListChannelAgentMembers(ctx, channelID)
 	if err != nil || len(agentMemberIDs) == 0 {
 		return nil
 	}
 
-	type agentRow struct {
-		id   pgtype.UUID
-		name string
-	}
-	agentsByName := make(map[string]agentRow, len(agentMemberIDs))
+	agentsByName := make(map[string]channelAgentRow, len(agentMemberIDs))
+	idToAgent := make(map[string]channelAgentRow, len(agentMemberIDs))
 	candidateNames := make([]string, 0, len(agentMemberIDs))
-	idToAgent := make(map[string]agentRow, len(agentMemberIDs))
+	memberIDStrs := make(map[string]bool, len(agentMemberIDs))
 	for _, memberID := range agentMemberIDs {
 		agent, err := h.Queries.GetAgent(ctx, memberID)
 		if err != nil || agent.ArchivedAt.Valid || !agent.RuntimeID.Valid {
 			continue
 		}
-		row := agentRow{id: agent.ID, name: agent.Name}
+		row := channelAgentRow{id: agent.ID, name: agent.Name}
 		agentsByName[strings.ToLower(agent.Name)] = row
-		idToAgent[uuidToString(agent.ID)] = row
+		idStr := uuidToString(agent.ID)
+		idToAgent[idStr] = row
+		memberIDStrs[idStr] = true
 		candidateNames = append(candidateNames, agent.Name)
 	}
 
-	// Decide which agents should respond.
-	var pickedIDs []pgtype.UUID
-	mentionedNames := parseMentionedNames(msg.Content, candidateNames)
-	if len(mentionedNames) > 0 {
-		// Manual mention: only mentioned agents respond.
+	// Path 1: structured trigger_mode
+	if triggerMode != nil {
+		mode := strings.ToLower(strings.TrimSpace(*triggerMode))
+		switch mode {
+		case "none":
+			return nil
+		case "manual":
+			return resolveManualTargets(requestedTargets, idToAgent, memberIDStrs)
+		case "auto":
+			return resolveAutoTargets(idToAgent, agentMemberIDs)
+		default:
+			// Unknown mode — be permissive and fall through to the legacy path
+			// rather than 400-ing. This keeps older clients working when a
+			// future mode name leaks into the protocol.
+			slog.Warn("unknown channel trigger_mode, falling back to legacy resolution",
+				"channel_id", uuidToString(channelID),
+				"trigger_mode", mode,
+			)
+		}
+	}
+
+	// Path 2: legacy fallback — @mention first, then channel auto_reply.
+	if mentionedNames := parseMentionedNames(msg.Content, candidateNames); len(mentionedNames) > 0 {
+		picked := make([]ChannelMessageTarget, 0, len(mentionedNames))
 		for _, name := range mentionedNames {
 			if row, ok := agentsByName[strings.ToLower(name)]; ok {
-				pickedIDs = append(pickedIDs, row.id)
+				picked = append(picked, ChannelMessageTarget{
+					Kind: "agent", ID: uuidToString(row.id), Name: row.name, Status: "queued",
+				})
 			}
 		}
-	} else if msg.SenderType == "human" && ch.AutoReply {
-		// Auto-reply: every agent member responds.
-		for _, memberID := range agentMemberIDs {
-			if row, ok := idToAgent[uuidToString(memberID)]; ok {
-				pickedIDs = append(pickedIDs, row.id)
-			}
+		return picked
+	}
+	if msg.SenderType == "human" && ch.AutoReply {
+		return resolveAutoTargets(idToAgent, agentMemberIDs)
+	}
+	return nil
+}
+
+// resolveManualTargets validates that each requested target is a current
+// agent member of the channel and returns the matching list. Targets that
+// don't match are silently dropped (the request is not rejected — partial
+// resolution is more useful than a hard fail).
+func resolveManualTargets(
+	requested []SendChannelMessageTargetSpec,
+	idToAgent map[string]channelAgentRow,
+	memberIDStrs map[string]bool,
+) []ChannelMessageTarget {
+	out := make([]ChannelMessageTarget, 0, len(requested))
+	seen := make(map[string]bool, len(requested))
+	for _, t := range requested {
+		if t.Kind != "agent" {
+			continue // squads/other kinds not supported yet
 		}
-	}
-
-	if len(pickedIDs) == 0 {
-		return nil
-	}
-
-	targets := make([]ChannelMessageTarget, 0, len(pickedIDs))
-	for _, id := range pickedIDs {
-		row := idToAgent[uuidToString(id)]
-		targets = append(targets, ChannelMessageTarget{
+		if !memberIDStrs[t.ID] {
+			continue // not a current channel member
+		}
+		if seen[t.ID] {
+			continue
+		}
+		row, ok := idToAgent[t.ID]
+		if !ok {
+			continue
+		}
+		seen[t.ID] = true
+		out = append(out, ChannelMessageTarget{
 			Kind:   "agent",
-			ID:     uuidToString(id),
+			ID:     t.ID,
 			Name:   row.name,
 			Status: "queued",
 		})
 	}
-	return targets
+	return out
+}
+
+// resolveAutoTargets fans out to every agent member of the channel.
+func resolveAutoTargets(
+	idToAgent map[string]channelAgentRow,
+	agentMemberIDs []pgtype.UUID,
+) []ChannelMessageTarget {
+	out := make([]ChannelMessageTarget, 0, len(agentMemberIDs))
+	for _, memberID := range agentMemberIDs {
+		row, ok := idToAgent[uuidToString(memberID)]
+		if !ok {
+			continue // archived / no runtime
+		}
+		out = append(out, ChannelMessageTarget{
+			Kind: "agent", ID: uuidToString(row.id), Name: row.name, Status: "queued",
+		})
+	}
+	return out
 }
 
 // enqueueChannelTargets actually inserts agent_task_queue rows for the
@@ -783,6 +891,9 @@ func channelMessageToResponse(m db.ChannelMessage) map[string]any {
 	}
 	if m.TaskID.Valid {
 		resp["task_id"] = uuidToString(m.TaskID)
+	}
+	if m.ClientMessageID.Valid {
+		resp["client_message_id"] = m.ClientMessageID.String
 	}
 	// Include persisted targets so history queries return them too.
 	if len(m.Targets) > 0 && string(m.Targets) != "[]" {

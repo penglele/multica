@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Hash, Lock, Settings, Users, X, ChevronRight, Send } from "lucide-react";
+import { Hash, Lock, Settings, Users, X, ChevronRight, ChevronDown, Send } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
@@ -99,8 +99,14 @@ export function ChannelDetailPage({ channelId }: { channelId: string }) {
             wsMembers={wsMembers}
           />
           <MessageComposer
-            onSend={(content) =>
-              sendMessage.mutate({ channelId: channel.id, content })
+            onSend={(content, opts) =>
+              sendMessage.mutate({
+                channelId: channel.id,
+                content,
+                triggerMode: opts?.triggerMode,
+                targets: opts?.targets,
+                clientMessageId: opts?.clientMessageId,
+              })
             }
             disabled={sendMessage.isPending}
             channelId={channel.id}
@@ -288,22 +294,32 @@ function MessageTargetsFooter({ targets }: { targets: import("@multica/core/chan
 }
 
 // ---------------------------------------------------------------------------
-// MessageComposer with @mention autocomplete
+// MessageComposer with @mention autocomplete + structured target picker (B1)
 // ---------------------------------------------------------------------------
+
+type ComposerSendOptions = {
+  triggerMode?: "none" | "manual" | "auto";
+  targets?: { kind: "agent"; id: string }[];
+  clientMessageId?: string;
+};
 
 function MessageComposer({
   onSend,
   disabled,
-  placeholder = "发送消息... (@mention 触发 agent)",
+  placeholder = "发送消息...",
   channelId,
 }: {
-  onSend: (content: string) => void;
+  onSend: (content: string, opts?: ComposerSendOptions) => void;
   disabled?: boolean;
   placeholder?: string;
   channelId?: string;
 }) {
   const [value, setValue] = useState("");
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  // B1 target picker: "follow" = let server fall back to channel auto_reply
+  // (or @mention), "none" = chat-only, "manual:<agentId>" = single agent.
+  const [targetMode, setTargetMode] = useState<string>("follow");
+  const [pickerOpen, setPickerOpen] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   const { data: members = [] } = useQuery({
@@ -313,7 +329,6 @@ function MessageComposer({
   const wsId = useWorkspaceId();
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
 
-  // Detect @mention trigger
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const v = e.target.value;
     setValue(v);
@@ -321,10 +336,10 @@ function MessageComposer({
     setMentionQuery(match ? (match[1] ?? "") : null);
   }
 
-  // Agent members in this channel
   const agentMemberIds = new Set(members.filter((m) => m.member_type === "agent").map((m) => m.member_id));
-  const agentSuggestions = agents.filter(
-    (a) => agentMemberIds.has(a.id) && (!mentionQuery || a.name.toLowerCase().startsWith(mentionQuery.toLowerCase())),
+  const channelAgents = agents.filter((a) => agentMemberIds.has(a.id) && !a.archived_at);
+  const agentSuggestions = channelAgents.filter(
+    (a) => !mentionQuery || a.name.toLowerCase().startsWith(mentionQuery.toLowerCase()),
   );
 
   function insertMention(name: string) {
@@ -336,11 +351,43 @@ function MessageComposer({
   const handleSend = useCallback(() => {
     const trimmed = value.trim();
     if (!trimmed || disabled) return;
-    onSend(trimmed);
+
+    // Translate the local target mode into the structured request fields.
+    // "follow" (default) sends nothing — server falls back to legacy
+    // resolution (auto_reply or @mention). The other modes are explicit.
+    let opts: ComposerSendOptions | undefined;
+    if (targetMode === "none") {
+      opts = { triggerMode: "none" };
+    } else if (targetMode === "auto") {
+      opts = { triggerMode: "auto" };
+    } else if (targetMode.startsWith("manual:")) {
+      const agentId = targetMode.slice("manual:".length);
+      opts = { triggerMode: "manual", targets: [{ kind: "agent", id: agentId }] };
+    }
+    // Generate a client-side id for idempotency on retries (B1 spec).
+    const cid = (typeof crypto !== "undefined" && "randomUUID" in crypto)
+      ? crypto.randomUUID()
+      : `cm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    if (opts) opts.clientMessageId = cid;
+    else opts = { clientMessageId: cid };
+
+    onSend(trimmed, opts);
     setValue("");
     setMentionQuery(null);
     ref.current?.focus();
-  }, [value, disabled, onSend]);
+  }, [value, disabled, onSend, targetMode]);
+
+  const targetLabel = (() => {
+    if (targetMode === "follow") return "跟随频道";
+    if (targetMode === "none") return "仅聊天";
+    if (targetMode === "auto") return "全部 agent";
+    if (targetMode.startsWith("manual:")) {
+      const id = targetMode.slice("manual:".length);
+      const a = channelAgents.find((x) => x.id === id);
+      return a ? `@${a.name}` : "已指定";
+    }
+    return targetMode;
+  })();
 
   return (
     <div className="px-4 pb-4 pt-2">
@@ -385,10 +432,59 @@ function MessageComposer({
           <Send className="size-3.5" />
         </Button>
       </div>
-      <p className="mt-1 text-[10px] text-muted-foreground px-1">
-        Enter 发送 · Shift+Enter 换行 · @name 触发 agent
-      </p>
+      <div className="mt-1 px-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setPickerOpen((v) => !v)}
+            className="px-1.5 py-0.5 rounded hover:bg-muted/60 inline-flex items-center gap-1 text-foreground/80"
+            title="选择本条消息的目标"
+          >
+            <span className="text-[9px] uppercase tracking-wide text-muted-foreground">交给</span>
+            <span className="font-medium">{targetLabel}</span>
+            <ChevronDown className="size-3" />
+          </button>
+          {pickerOpen && (
+            <div className="absolute bottom-full mb-1 left-0 z-10 min-w-[160px] border border-border rounded-md bg-background shadow-md py-1 text-[11px]">
+              <ComposerPickerItem label="跟随频道（默认）" hint="按频道规则" active={targetMode === "follow"} onClick={() => { setTargetMode("follow"); setPickerOpen(false); }} />
+              <ComposerPickerItem label="仅聊天，不触发 agent" active={targetMode === "none"} onClick={() => { setTargetMode("none"); setPickerOpen(false); }} />
+              <ComposerPickerItem label="全部 agent（auto）" active={targetMode === "auto"} onClick={() => { setTargetMode("auto"); setPickerOpen(false); }} />
+              {channelAgents.length > 0 && (
+                <>
+                  <div className="my-1 border-t border-border" />
+                  <div className="px-2 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">指定一个 agent</div>
+                  {channelAgents.map((a) => (
+                    <ComposerPickerItem
+                      key={a.id}
+                      label={`@${a.name}`}
+                      active={targetMode === `manual:${a.id}`}
+                      onClick={() => { setTargetMode(`manual:${a.id}`); setPickerOpen(false); }}
+                    />
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+        <span className="ml-auto">Enter 发送 · Shift+Enter 换行</span>
+      </div>
     </div>
+  );
+}
+
+function ComposerPickerItem({ label, hint, active, onClick }: { label: string; hint?: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "w-full text-left px-2 py-1 hover:bg-muted/60 flex items-center justify-between gap-2",
+        active && "bg-muted/40 font-medium",
+      )}
+    >
+      <span>{label}</span>
+      {hint && <span className="text-muted-foreground text-[9px]">{hint}</span>}
+    </button>
   );
 }
 
@@ -439,8 +535,15 @@ function ThreadPanel({
         )}
       </div>
       <MessageComposer
-        onSend={(content) =>
-          sendMessage.mutate({ channelId, content, threadParentId: parentId })
+        onSend={(content, opts) =>
+          sendMessage.mutate({
+            channelId,
+            content,
+            threadParentId: parentId,
+            triggerMode: opts?.triggerMode,
+            targets: opts?.targets,
+            clientMessageId: opts?.clientMessageId,
+          })
         }
         disabled={sendMessage.isPending}
         placeholder="回复..."

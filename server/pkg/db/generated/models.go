@@ -184,17 +184,18 @@ type ChannelMember struct {
 }
 
 type ChannelMessage struct {
-	ID             pgtype.UUID        `json:"id"`
-	ChannelID      pgtype.UUID        `json:"channel_id"`
-	SenderID       pgtype.UUID        `json:"sender_id"`
-	SenderType     string             `json:"sender_type"`
-	Content        string             `json:"content"`
-	Seq            int64              `json:"seq"`
-	ThreadParentID pgtype.UUID        `json:"thread_parent_id"`
-	TaskID         pgtype.UUID        `json:"task_id"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	Targets        []byte             `json:"targets"`
+	ID              pgtype.UUID        `json:"id"`
+	ChannelID       pgtype.UUID        `json:"channel_id"`
+	SenderID        pgtype.UUID        `json:"sender_id"`
+	SenderType      string             `json:"sender_type"`
+	Content         string             `json:"content"`
+	Seq             int64              `json:"seq"`
+	ThreadParentID  pgtype.UUID        `json:"thread_parent_id"`
+	TaskID          pgtype.UUID        `json:"task_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Targets         []byte             `json:"targets"`
+	ClientMessageID pgtype.Text        `json:"client_message_id"`
 }
 
 type ChannelReadState struct {

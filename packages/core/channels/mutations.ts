@@ -42,8 +42,28 @@ export function useDeleteChannel() {
 export function useSendChannelMessage() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ channelId, content, threadParentId }: { channelId: string; content: string; threadParentId?: string }) =>
-      api.sendChannelMessage(channelId, content, threadParentId),
+    mutationFn: ({
+      channelId,
+      content,
+      threadParentId,
+      triggerMode,
+      targets,
+      clientMessageId,
+    }: {
+      channelId: string;
+      content: string;
+      threadParentId?: string;
+      triggerMode?: "none" | "manual" | "auto";
+      targets?: { kind: "agent"; id: string }[];
+      clientMessageId?: string;
+    }) =>
+      api.sendChannelMessage(channelId, {
+        content,
+        thread_parent_id: threadParentId,
+        trigger_mode: triggerMode,
+        targets,
+        client_message_id: clientMessageId,
+      }),
     onSuccess: (msg: ChannelMessage) => {
       // Append to cache, deduping on id — the WS channel:message event will
       // also fire (we broadcast on send), so without this guard we'd insert

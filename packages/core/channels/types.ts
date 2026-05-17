@@ -36,6 +36,7 @@ export interface ChannelMessage {
   seq: number;
   thread_parent_id?: string;
   task_id?: string;
+  client_message_id?: string;
   created_at: string;
   updated_at: string;
   /** B0 minimal feedback: who this message was routed to, and their current status. */
@@ -67,4 +68,7 @@ export interface UpdateChannelRequest {
 export interface SendChannelMessageRequest {
   content: string;
   thread_parent_id?: string;
+  client_message_id?: string;
+  trigger_mode?: "none" | "manual" | "auto";
+  targets?: { kind: "agent"; id: string }[];
 }

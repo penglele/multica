@@ -53,9 +53,14 @@ SELECT member_id FROM channel_member
 WHERE channel_id = $1 AND member_type = 'agent';
 
 -- name: CreateChannelMessage :one
-INSERT INTO channel_message (channel_id, sender_id, sender_type, content, thread_parent_id, task_id, targets)
-VALUES ($1, $2, $3, $4, sqlc.narg('thread_parent_id'), sqlc.narg('task_id'), sqlc.narg('targets'))
+INSERT INTO channel_message (channel_id, sender_id, sender_type, content, thread_parent_id, task_id, targets, client_message_id)
+VALUES ($1, $2, $3, $4, sqlc.narg('thread_parent_id'), sqlc.narg('task_id'), sqlc.narg('targets'), sqlc.narg('client_message_id'))
 RETURNING *;
+
+-- name: GetChannelMessageByClientID :one
+SELECT * FROM channel_message
+WHERE channel_id = $1 AND client_message_id = $2
+LIMIT 1;
 
 -- name: UpdateChannelMessageTargets :one
 UPDATE channel_message SET targets = $2 WHERE id = $1 RETURNING *;
