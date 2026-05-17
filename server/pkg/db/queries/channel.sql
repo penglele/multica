@@ -33,6 +33,12 @@ SET name = COALESCE(sqlc.narg('name'), name),
 WHERE id = sqlc.arg('id')
 RETURNING *;
 
+-- name: ClearChannelDefaultTarget :exec
+-- Explicitly nulls default_target_id. UpdateChannel can't do this because
+-- it uses COALESCE-on-narg semantics ("nil = no change"); clearing requires
+-- a dedicated query that always sets NULL.
+UPDATE channel SET default_target_id = NULL WHERE id = $1;
+
 -- name: DeleteChannel :exec
 DELETE FROM channel WHERE id = $1;
 

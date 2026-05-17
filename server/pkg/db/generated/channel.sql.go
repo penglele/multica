@@ -34,6 +34,18 @@ func (q *Queries) AddChannelMember(ctx context.Context, arg AddChannelMemberPara
 	return err
 }
 
+const clearChannelDefaultTarget = `-- name: ClearChannelDefaultTarget :exec
+UPDATE channel SET default_target_id = NULL WHERE id = $1
+`
+
+// Explicitly nulls default_target_id. UpdateChannel can't do this because
+// it uses COALESCE-on-narg semantics ("nil = no change"); clearing requires
+// a dedicated query that always sets NULL.
+func (q *Queries) ClearChannelDefaultTarget(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearChannelDefaultTarget, id)
+	return err
+}
+
 const countAgentTurnsInThread = `-- name: CountAgentTurnsInThread :one
 SELECT COUNT(*)::int FROM channel_message
 WHERE (id = $1 OR thread_parent_id = $1)

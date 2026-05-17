@@ -181,6 +181,43 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 		defaultTargetUUID = parsed
 	}
 
+	// Cross-field consistency: a "default_agent" strategy is meaningless
+	// without a default_target_id. We compute the EFFECTIVE post-PATCH
+	// state (existing values + this request's overrides) and reject the
+	// update if it would leave the channel in a silently broken config —
+	// strategy says "fan to one agent" but there's no agent to fan to.
+	current, err := h.Queries.GetChannel(r.Context(), channelID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load channel")
+		return
+	}
+
+	// Auto-fallback FIRST: when the caller explicitly clears
+	// default_target_id (sends "") while the channel is currently in
+	// default_agent strategy AND they didn't simultaneously change the
+	// strategy, force-flip back to all_agents. This prevents the
+	// validation below from 400-ing a "just clear my default agent"
+	// intent — the user obviously wants the channel to keep working.
+	if req.DefaultTargetID != nil && *req.DefaultTargetID == "" &&
+		req.AutoReplyStrategy == nil && current.AutoReplyStrategy == "default_agent" {
+		fallback := "all_agents"
+		req.AutoReplyStrategy = &fallback
+	}
+
+	effectiveStrategy := current.AutoReplyStrategy
+	if req.AutoReplyStrategy != nil {
+		effectiveStrategy = *req.AutoReplyStrategy
+	}
+	effectiveDefaultValid := current.DefaultTargetID.Valid
+	if req.DefaultTargetID != nil {
+		effectiveDefaultValid = *req.DefaultTargetID != ""
+	}
+	if effectiveStrategy == "default_agent" && !effectiveDefaultValid {
+		writeError(w, http.StatusBadRequest,
+			"auto_reply_strategy='default_agent' requires default_target_id (set them together, or switch to 'all_agents')")
+		return
+	}
+
 	ch, err := h.Queries.UpdateChannel(r.Context(), db.UpdateChannelParams{
 		ID:                channelID,
 		Name:              pgtype.Text{String: strDeref(req.Name), Valid: req.Name != nil},
@@ -193,6 +230,23 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update channel")
 		return
+	}
+
+	// Explicit clear of default_target_id can't go through UpdateChannel
+	// (COALESCE-on-narg keeps the old value). Run a dedicated query so the
+	// final stored row matches the user's intent.
+	if req.DefaultTargetID != nil && *req.DefaultTargetID == "" {
+		if err := h.Queries.ClearChannelDefaultTarget(r.Context(), channelID); err != nil {
+			slog.Warn("failed to clear default_target_id",
+				"channel_id", uuidToString(channelID),
+				"error", err,
+			)
+		} else {
+			// Re-read to reflect the cleared value in the response.
+			if reread, rerr := h.Queries.GetChannel(r.Context(), channelID); rerr == nil {
+				ch = reread
+			}
+		}
 	}
 
 	h.broadcastChannelEvent(wsID, protocol.EventChannelUpdated, map[string]any{"channel": channelToResponse(ch)})
