@@ -29,6 +29,9 @@ describe("paths.workspace() shape", () => {
         "skills",
         "squads",
         "settings",
+        // Added when channel-chat-upgrade landed; the page is a list of
+        // workspace channels at /<slug>/channels.
+        "channels",
       ]),
     );
   });
@@ -50,6 +53,7 @@ describe("paths.workspace() shape", () => {
       ["skills", "skills"],
       ["squads", "squads"],
       ["settings", "settings"],
+      ["channels", "channels"],
     ];
     const wsAsAny = ws as unknown as Record<string, () => string>;
     for (const [method, segment] of expectedSegments) {

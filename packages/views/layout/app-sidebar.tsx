@@ -780,8 +780,16 @@ function ChannelsSidebarSection({
           <SidebarGroupContent>
             <SidebarMenu className="gap-[2px]">
               {channels.map((ch) => {
-                const href = p.channelDetail(ch.id);
-                const isActive = pathname === href;
+                // W1: the sidebar channel item now lands on the new
+                // BONCML Workspace shell (`/rooms/<id>`). The legacy
+                // `/channels/<id>` route is still alive for direct
+                // links and for the dashboard's channel index page,
+                // so we mark the item as active when EITHER path is
+                // current — otherwise users on the old route would see
+                // nothing selected after a deep link.
+                const href = p.workspaceRoom(ch.id);
+                const legacyHref = p.channelDetail(ch.id);
+                const isActive = pathname === href || pathname === legacyHref;
                 return (
                   <SidebarMenuItem key={ch.id} className="group/ch">
                     <SidebarMenuButton
@@ -845,7 +853,7 @@ function ChannelsSidebarSection({
       <CreateChannelDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={(id) => push(p.channelDetail(id))}
+        onCreated={(id) => push(p.workspaceRoom(id))}
       />
     </>
   );

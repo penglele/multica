@@ -102,8 +102,22 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws2 });
 
     // Should have called invalidateQueries for all workspace-scoped keys
-    // (11 workspace-scoped + 1 workspaceKeys.list() = 12 calls)
-    expect(invalidateSpy).toHaveBeenCalledTimes(12);
+    // (the dashboard's wsId-keyed caches + workspaceKeys.list() + the
+    // channel sub-caches added by channel-chat-upgrade C2). Channel
+    // messages get a SURGICAL resync (not invalidate), so they aren't
+    // counted here.
+    //
+    // Current breakdown:
+    //   11 wsId-keyed keys   (issues, inbox, agents, members, skills,
+    //                          projects, runtimes, autopilots,
+    //                          agentTaskSnapshots, agentActivity,
+    //                          agentRunCounts)
+    //  +1 ['channels', wsId] (channel listing per workspace)
+    //  +1 ['channel-thread'] (thread caches across all parents)
+    //  +1 ['channel-members'](member caches across all channels)
+    //  +1 workspaceKeys.list() (top-level list of workspaces)
+    //  =15
+    expect(invalidateSpy).toHaveBeenCalledTimes(15);
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {

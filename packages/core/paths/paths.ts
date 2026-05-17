@@ -19,6 +19,10 @@ function workspaceScoped(slug: string) {
   return {
     channels: () => `${ws}/channels`,
     channelDetail: (id: string) => `${ws}/channels/${encode(id)}`,
+    /** BONCML Workspace shell wrapping a single channel (== room) inside
+     *  the four-tab analyst workbench. Coexists with channelDetail; we
+     *  keep the old route alive so anything that links to it still works. */
+    workspaceRoom: (roomId: string) => `${ws}/rooms/${encode(roomId)}`,
     root: () => `${ws}/issues`,
     usage: () => `${ws}/usage`,
     issues: () => `${ws}/issues`,
