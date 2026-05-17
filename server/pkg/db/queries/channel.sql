@@ -147,6 +147,6 @@ DO UPDATE SET last_read_seq = GREATEST(channel_read_state.last_read_seq, EXCLUDE
 SELECT * FROM channel_read_state WHERE channel_id = $1 AND user_id = $2;
 
 -- name: CreateChannelTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, channel_id, channel_message_id)
-VALUES ($1, $2, NULL, 'queued', $3, $4, $5)
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, channel_id, channel_message_id, analysis_task_id)
+VALUES ($1, $2, NULL, 'queued', $3, $4, $5, $6)
 RETURNING *;

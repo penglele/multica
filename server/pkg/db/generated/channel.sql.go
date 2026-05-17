@@ -147,9 +147,9 @@ func (q *Queries) CreateChannelMessage(ctx context.Context, arg CreateChannelMes
 }
 
 const createChannelTask = `-- name: CreateChannelTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, channel_id, channel_message_id)
-VALUES ($1, $2, NULL, 'queued', $3, $4, $5)
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, channel_id, channel_message_id
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, channel_id, channel_message_id, analysis_task_id)
+VALUES ($1, $2, NULL, 'queued', $3, $4, $5, $6)
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, channel_id, channel_message_id, analysis_task_id
 `
 
 type CreateChannelTaskParams struct {
@@ -158,6 +158,7 @@ type CreateChannelTaskParams struct {
 	Priority         int32       `json:"priority"`
 	ChannelID        pgtype.UUID `json:"channel_id"`
 	ChannelMessageID pgtype.UUID `json:"channel_message_id"`
+	AnalysisTaskID   pgtype.UUID `json:"analysis_task_id"`
 }
 
 func (q *Queries) CreateChannelTask(ctx context.Context, arg CreateChannelTaskParams) (AgentTaskQueue, error) {
@@ -167,6 +168,7 @@ func (q *Queries) CreateChannelTask(ctx context.Context, arg CreateChannelTaskPa
 		arg.Priority,
 		arg.ChannelID,
 		arg.ChannelMessageID,
+		arg.AnalysisTaskID,
 	)
 	var i AgentTaskQueue
 	err := row.Scan(
@@ -197,6 +199,7 @@ func (q *Queries) CreateChannelTask(ctx context.Context, arg CreateChannelTaskPa
 		&i.IsLeaderTask,
 		&i.ChannelID,
 		&i.ChannelMessageID,
+		&i.AnalysisTaskID,
 	)
 	return i, err
 }

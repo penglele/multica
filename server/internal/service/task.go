@@ -1793,13 +1793,22 @@ func (s *TaskService) emitAnalysisAuditForChannelTask(ctx context.Context, task 
 	if err != nil {
 		return
 	}
-	at, err := s.Queries.GetDefaultAnalysisTaskForRoom(ctx, task.ChannelID)
-	if err != nil {
-		// Room has no analysis_task — shouldn't happen post-P2 but
-		// don't crash if it does.
-		return
+
+	// P4: prefer the explicit analysis_task_id on the queue row. Fall
+	// back to the room's default only for legacy tasks that predate P4
+	// (those have analysis_task_id = NULL).
+	var analysisTaskID pgtype.UUID
+	if task.AnalysisTaskID.Valid {
+		analysisTaskID = task.AnalysisTaskID
+	} else {
+		at, err := s.Queries.GetDefaultAnalysisTaskForRoom(ctx, task.ChannelID)
+		if err != nil {
+			return
+		}
+		analysisTaskID = at.ID
 	}
-	action := "agent_task." + targetStatus // e.g. agent_task.queued, agent_task.running, agent_task.completed
+
+	action := "agent_task." + targetStatus
 	details, _ := json.Marshal(map[string]any{
 		"agent_task_queue_id": util.UUIDToString(task.ID),
 		"agent_id":           util.UUIDToString(task.AgentID),
@@ -1807,7 +1816,7 @@ func (s *TaskService) emitAnalysisAuditForChannelTask(ctx context.Context, task 
 	})
 	_, _ = s.Queries.CreateAnalysisAuditEvent(ctx, db.CreateAnalysisAuditEventParams{
 		WorkspaceID:    ch.WorkspaceID,
-		AnalysisTaskID: pgtype.UUID{Bytes: at.ID.Bytes, Valid: true},
+		AnalysisTaskID: analysisTaskID,
 		ArtifactID:     pgtype.UUID{},
 		ActorType:      "agent",
 		ActorID:        pgtype.UUID{Bytes: task.AgentID.Bytes, Valid: true},
@@ -1817,6 +1826,60 @@ func (s *TaskService) emitAnalysisAuditForChannelTask(ctx context.Context, task 
 		Details:        details,
 		RuntimeVersion: pgtype.Text{},
 	})
+
+	// P4: when a Runner task completes and carries an explicit
+	// analysis_task_id, write a minimal result_package artifact so the
+	// ARTIFACTS tab shows the outcome. Real result content comes from
+	// the daemon in P5; this is the protocol-level placeholder that
+	// proves the write path is correct.
+	if targetStatus == "completed" && task.AnalysisTaskID.Valid {
+		payload, _ := json.Marshal(map[string]any{
+			"summary": "Analysis completed (P4 skeleton — real results in P5)",
+			"status":  "completed",
+		})
+		fileRefs, _ := json.Marshal([]string{})
+		artifact, artErr := s.Queries.CreateAnalysisArtifact(ctx, db.CreateAnalysisArtifactParams{
+			WorkspaceID:    ch.WorkspaceID,
+			AnalysisTaskID: task.AnalysisTaskID,
+			Type:           "result_package",
+			Title:          "Result Package",
+			Status:         "completed",
+			Version:        1,
+			Payload:        payload,
+			FileRefs:       fileRefs,
+			CreatedByType:  "agent",
+			CreatedByID:    pgtype.UUID{Bytes: task.AgentID.Bytes, Valid: true},
+		})
+		if artErr == nil {
+			auditDetails, _ := json.Marshal(map[string]any{
+				"artifact_type": "result_package",
+				"agent_id":      util.UUIDToString(task.AgentID),
+			})
+			_, _ = s.Queries.CreateAnalysisAuditEvent(ctx, db.CreateAnalysisAuditEventParams{
+				WorkspaceID:    ch.WorkspaceID,
+				AnalysisTaskID: task.AnalysisTaskID,
+				ArtifactID:     pgtype.UUID{Bytes: artifact.ID.Bytes, Valid: true},
+				ActorType:      "agent",
+				ActorID:        pgtype.UUID{Bytes: task.AgentID.Bytes, Valid: true},
+				Action:         "artifact.created",
+				TargetType:     pgtype.Text{String: "result_package", Valid: true},
+				TargetID:       pgtype.UUID{Bytes: artifact.ID.Bytes, Valid: true},
+				Details:        auditDetails,
+				RuntimeVersion: pgtype.Text{},
+			})
+		}
+		// Advance analysis_task stage to 'completed'.
+		_, _ = s.Queries.UpdateAnalysisTask(ctx, db.UpdateAnalysisTaskParams{
+			ID:           task.AnalysisTaskID,
+			CurrentStage: pgtype.Text{String: "completed", Valid: true},
+		})
+	}
+	if targetStatus == "failed" && task.AnalysisTaskID.Valid {
+		_, _ = s.Queries.UpdateAnalysisTask(ctx, db.UpdateAnalysisTaskParams{
+			ID:           task.AnalysisTaskID,
+			CurrentStage: pgtype.Text{String: "failed", Valid: true},
+		})
+	}
 }
 
 // mapTaskStatusToTargetStatus translates internal agent_task_queue status

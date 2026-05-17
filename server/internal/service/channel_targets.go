@@ -345,6 +345,7 @@ func (s *TaskService) EnqueueChannelTargets(
 			Priority:         2,
 			ChannelID:        channelID,
 			ChannelMessageID: msg.ID,
+			AnalysisTaskID:   pgtype.UUID{}, // normal chat tasks don't bind to an analysis_task
 		})
 		if err != nil {
 			slog.Error("channel task enqueue failed",

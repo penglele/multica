@@ -589,6 +589,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/analysis-tasks", h.ListAnalysisTasks)
 					r.Get("/analysis-artifacts", h.ListAnalysisArtifacts)
 					r.Get("/analysis-audit-events", h.ListAnalysisAuditEvents)
+					r.Route("/analysis-tasks/{taskId}", func(r chi.Router) {
+						r.Post("/boncml-jobs", h.CreateBoncmlJob)
+					})
 				})
 			})
 

@@ -97,6 +97,7 @@ type AgentTaskQueue struct {
 	IsLeaderTask      bool               `json:"is_leader_task"`
 	ChannelID         pgtype.UUID        `json:"channel_id"`
 	ChannelMessageID  pgtype.UUID        `json:"channel_message_id"`
+	AnalysisTaskID    pgtype.UUID        `json:"analysis_task_id"`
 }
 
 type AnalysisArtifact struct {

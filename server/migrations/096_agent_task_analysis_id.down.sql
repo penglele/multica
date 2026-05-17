@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_agent_task_analysis;
+ALTER TABLE agent_task_queue DROP COLUMN IF EXISTS analysis_task_id;
