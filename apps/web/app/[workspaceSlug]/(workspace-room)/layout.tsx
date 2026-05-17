@@ -3,7 +3,7 @@
 import { WorkspaceLayout } from "@multica/views/layout";
 import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
 import { SearchCommand } from "@multica/views/search";
-import { ChatFab, ChatWindow } from "@multica/views/chat";
+
 import { StarterContentPrompt } from "@multica/views/onboarding";
 
 // (workspace-room) is the BONCML Workspace route group. Pages inside it
@@ -20,8 +20,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       extra={
         <>
           <SearchCommand />
-          <ChatWindow />
-          <ChatFab />
           <StarterContentPrompt />
         </>
       }
