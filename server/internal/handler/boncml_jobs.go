@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/exec"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -154,6 +156,14 @@ func (h *Handler) CreateBoncmlJob(w http.ResponseWriter, r *http.Request) {
 		CurrentStage: pgtype.Text{String: "running", Valid: true},
 	})
 
+	// 7. P5: Execute the analysis synchronously via boncml-stat-tools
+	// subprocess. This is the MVP path — the server calls the Python
+	// bridge directly rather than waiting for the agent daemon to do it.
+	// The protocol shape (artifact + audit writes) is identical to what
+	// the daemon path would produce; P6+ can move execution to the daemon
+	// side once agent instructions are tuned.
+	go h.executeBoncmlJob(task, jobSpec, req)
+
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"job_spec_artifact_id": uuidToString(jobSpec.ID),
 		"agent_task_id":        uuidToString(agentTask.ID),
@@ -186,5 +196,140 @@ func (h *Handler) writeAnalysisAudit(
 		TargetID:       pgtype.UUID{},
 		Details:        details,
 		RuntimeVersion: pgtype.Text{},
+	})
+}
+
+// executeBoncmlJob runs boncml-stat-tools execute_analysis via subprocess
+// and writes the result as a result_package artifact + audit events.
+// Runs in a goroutine off the request path.
+func (h *Handler) executeBoncmlJob(task db.AnalysisTask, jobSpec db.AnalysisArtifact, req createBoncmlJobRequest) {
+	ctx := context.Background()
+
+	// Audit: job.running
+	h.writeAnalysisAudit(ctx, task.WorkspaceID, task.ID, jobSpec.ID, "system", "", "job.running", map[string]any{
+		"algorithm": req.Algorithm,
+	})
+
+	// Build params for execute_analysis
+	params := map[string]any{
+		"data_path": req.DatasetID, // In P5 MVP, dataset_id IS the file path
+		"mode":      "one_sample",  // Default; real dispatch reads from job spec
+	}
+	// Merge field_mapping into params
+	if req.FieldMapping != nil {
+		for k, v := range req.FieldMapping {
+			params[k] = v
+		}
+	}
+	// Merge parameters into params
+	if req.Parameters != nil {
+		for k, v := range req.Parameters {
+			params[k] = v
+		}
+	}
+
+	paramsJSON, _ := json.Marshal(params)
+
+	// Resolve python path and runtime root from environment
+	pythonPath := os.Getenv("BONCML_PYTHON_PATH")
+	if pythonPath == "" {
+		pythonPath = "python3"
+	}
+	boncmlRoot := os.Getenv("BONCML_STAT_TOOLS_ROOT")
+	if boncmlRoot == "" {
+		boncmlRoot = "/Users/penglei/Desktop/JApplication/work_space/git_clone/boncml-stat-tools"
+	}
+	runtimeRoot := boncmlRoot + "/vendored"
+	bridgeScript := boncmlRoot + "/boncml/bridge_runner.py"
+
+	// Execute
+	cmd := exec.CommandContext(ctx, pythonPath, bridgeScript, req.Algorithm, string(paramsJSON), runtimeRoot)
+	cmd.Dir = boncmlRoot
+	output, err := cmd.Output()
+
+	if err != nil {
+		// Job failed
+		errMsg := err.Error()
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			errMsg = string(exitErr.Stderr)
+		}
+		slog.Error("boncml execution failed", "algorithm", req.Algorithm, "error", errMsg)
+		h.writeAnalysisAudit(ctx, task.WorkspaceID, task.ID, jobSpec.ID, "system", "", "job.failed", map[string]any{
+			"algorithm": req.Algorithm,
+			"error":     errMsg[:min(len(errMsg), 500)],
+		})
+		_, _ = h.Queries.UpdateAnalysisTask(ctx, db.UpdateAnalysisTaskParams{
+			ID:           task.ID,
+			CurrentStage: pgtype.Text{String: "failed", Valid: true},
+		})
+		return
+	}
+
+	// Parse result
+	var result map[string]any
+	if err := json.Unmarshal(output, &result); err != nil {
+		slog.Error("boncml result parse failed", "error", err)
+		h.writeAnalysisAudit(ctx, task.WorkspaceID, task.ID, jobSpec.ID, "system", "", "job.failed", map[string]any{
+			"algorithm": req.Algorithm,
+			"error":     "invalid JSON from bridge_runner",
+		})
+		_, _ = h.Queries.UpdateAnalysisTask(ctx, db.UpdateAnalysisTaskParams{
+			ID:           task.ID,
+			CurrentStage: pgtype.Text{String: "failed", Valid: true},
+		})
+		return
+	}
+
+	// Check for bridge-level error
+	if errField, ok := result["__error__"]; ok {
+		slog.Error("boncml algorithm error", "error", errField)
+		h.writeAnalysisAudit(ctx, task.WorkspaceID, task.ID, jobSpec.ID, "system", "", "job.failed", map[string]any{
+			"algorithm": req.Algorithm,
+			"error":     errField,
+		})
+		_, _ = h.Queries.UpdateAnalysisTask(ctx, db.UpdateAnalysisTaskParams{
+			ID:           task.ID,
+			CurrentStage: pgtype.Text{String: "failed", Valid: true},
+		})
+		return
+	}
+
+	// Success: write result_package artifact
+	payload, _ := json.Marshal(result)
+	fileRefs, _ := json.Marshal([]string{})
+
+	artifact, artErr := h.Queries.CreateAnalysisArtifact(ctx, db.CreateAnalysisArtifactParams{
+		WorkspaceID:    task.WorkspaceID,
+		AnalysisTaskID: task.ID,
+		Type:           "result_package",
+		Title:          "Result: " + req.Algorithm,
+		Status:         "completed",
+		Version:        1,
+		Payload:        payload,
+		FileRefs:       fileRefs,
+		CreatedByType:  "system",
+		CreatedByID:    pgtype.UUID{},
+	})
+	if artErr != nil {
+		slog.Error("failed to create result_package artifact", "error", artErr)
+		return
+	}
+
+	// Audit: artifact.created
+	h.writeAnalysisAudit(ctx, task.WorkspaceID, task.ID, artifact.ID, "system", "", "artifact.created", map[string]any{
+		"artifact_type": "result_package",
+		"algorithm":     req.Algorithm,
+	})
+
+	// Audit: job.completed
+	h.writeAnalysisAudit(ctx, task.WorkspaceID, task.ID, jobSpec.ID, "system", "", "job.completed", map[string]any{
+		"algorithm":    req.Algorithm,
+		"result_artifact_id": uuidToString(artifact.ID),
+	})
+
+	// Advance task stage
+	_, _ = h.Queries.UpdateAnalysisTask(ctx, db.UpdateAnalysisTaskParams{
+		ID:           task.ID,
+		CurrentStage: pgtype.Text{String: "completed", Valid: true},
 	})
 }
