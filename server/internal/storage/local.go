@@ -35,7 +35,12 @@ type localMeta struct {
 //
 // Environment variables:
 //   - LOCAL_UPLOAD_DIR (default: "./data/uploads")
-//   - LOCAL_UPLOAD_BASE_URL (optional, e.g., "http://localhost:8080")
+//   - LOCAL_UPLOAD_BASE_URL (optional, e.g., "https://multica.example.com").
+//     This URL is embedded in chat/channel messages, so it MUST be
+//     reachable from agent runtimes — those typically sit on a different
+//     machine from the server, so "http://localhost:8080" works only for
+//     local-only dev. For any real deploy, set the externally-reachable
+//     server address (public IP or hostname).
 func NewLocalStorageFromEnv() *LocalStorage {
 	uploadDir := os.Getenv("LOCAL_UPLOAD_DIR")
 	if uploadDir == "" {
