@@ -1110,6 +1110,23 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 			} else {
 				// Broadcast channel:message to channel scope.
 				s.broadcastChannelMessage(ctx, task.ChannelID, msg)
+
+				// P5: Cross-agent handoff. If the agent's reply @mentions
+				// another agent, resolve and enqueue that target. This is
+				// how Orchestrator hands off to Runner. The existing
+				// maxAgentTurns loop guard prevents infinite chains.
+				targets := ResolveChannelTargets(ctx, s.Queries, ResolveChannelTargetsInput{
+					ChannelID: task.ChannelID,
+					Message:   msg,
+					// No TriggerMode → legacy path: parse @mentions from content.
+				})
+				if len(targets) > 0 {
+					onFailure := func(targetID string) {
+						// Best-effort: if enqueue fails, the user sees the
+						// Orchestrator's reply and can manually trigger.
+					}
+					go s.EnqueueChannelTargets(ctx, task.ChannelID, msg, targets, onFailure)
+				}
 			}
 		}
 	}
