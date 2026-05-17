@@ -15,6 +15,9 @@ export interface UploadContext {
   issueId?: string;
   commentId?: string;
   chatSessionId?: string;
+  /** P3: when set, the server auto-creates a dataset_manifest artifact
+   *  for CSV uploads attached to this room. */
+  channelId?: string;
 }
 
 export function useFileUpload(
@@ -35,6 +38,7 @@ export function useFileUpload(
           issueId: ctx?.issueId,
           commentId: ctx?.commentId,
           chatSessionId: ctx?.chatSessionId,
+          channelId: ctx?.channelId,
         });
         return { ...att, link: att.url };
       } finally {

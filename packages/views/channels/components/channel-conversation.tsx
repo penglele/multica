@@ -508,21 +508,16 @@ function MessageComposer({
 
   const handleUpload = useCallback(
     async (file: File): Promise<UploadResult | null> => {
-      // Workspace-scoped upload — the attachment record gets created with
-      // workspace_id but no channel/message FK. The CDN URL is what gets
-      // dropped into the markdown body, which is enough for agents to
-      // download via `multica attachment download <url>`. Tighter binding
-      // (attachment.channel_message_id) would need a migration; if/when we
-      // want lifecycle-managed cleanup we can add it later without
-      // breaking this UX.
+      // P3: pass channelId so the server can auto-create a
+      // dataset_manifest artifact when the file is a CSV.
       setPendingUploads((n) => n + 1);
       try {
-        return await uploadWithToast(file);
+        return await uploadWithToast(file, { channelId });
       } finally {
         setPendingUploads((n) => Math.max(0, n - 1));
       }
     },
-    [uploadWithToast],
+    [uploadWithToast, channelId],
   );
 
   // Drag-and-drop wraps the rounded card so a drop anywhere on the input

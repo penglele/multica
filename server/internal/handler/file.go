@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -265,6 +266,18 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			params.ChatSessionID = session.ID
 		}
 
+		// P3: channel_id (room_id) — when set, the upload is associated
+		// with a room. If the file is a CSV we auto-create a
+		// dataset_manifest artifact on the room's default analysis_task.
+		var channelIDForManifest pgtype.UUID
+		if channelIDStr := r.FormValue("channel_id"); channelIDStr != "" {
+			cid, ok := parseUUIDOrBadRequest(w, channelIDStr, "channel_id")
+			if !ok {
+				return
+			}
+			channelIDForManifest = cid
+		}
+
 		link, err := h.Storage.Upload(r.Context(), key, data, contentType, header.Filename)
 		if err != nil {
 			slog.Error("file upload failed", "error", err)
@@ -279,6 +292,14 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			// S3 upload succeeded but DB record failed — still return the link
 			// so the file is usable. Log the error for investigation.
 		} else {
+			// P3: auto-create dataset_manifest artifact when a CSV is
+			// uploaded to a room. This is the first real business-driven
+			// artifact write — it proves the ARTIFACTS tab can show
+			// something that came from an actual user action, not just
+			// backfill/seed.
+			if channelIDForManifest.Valid && isCSV(contentType, header.Filename) {
+				h.createDatasetManifestForUpload(r.Context(), channelIDForManifest, att, data, userID)
+			}
 			writeJSON(w, http.StatusOK, h.attachmentToResponse(att))
 			return
 		}
@@ -628,4 +649,100 @@ func (h *Handler) deleteS3Objects(ctx context.Context, urls []string) {
 		keys[i] = h.Storage.KeyFromURL(u)
 	}
 	h.Storage.DeleteKeys(ctx, keys)
+}
+
+// isCSV returns true when the content type or filename extension indicates
+// a CSV file. We check both because the sniffer sometimes returns
+// "text/plain" for CSVs.
+func isCSV(contentType, filename string) bool {
+	if contentType == "text/csv" || contentType == "application/csv" {
+		return true
+	}
+	return strings.HasSuffix(strings.ToLower(filename), ".csv")
+}
+
+// createDatasetManifestForUpload produces a dataset_manifest artifact for
+// a CSV uploaded to a room. It reads the first line to extract column
+// names and counts total rows. This is intentionally minimal — a richer
+// manifest (types, quality warnings, stats) is a P4/P5 concern. The
+// point here is to prove the ARTIFACTS tab shows real business-driven
+// content from an actual user action.
+func (h *Handler) createDatasetManifestForUpload(
+	ctx context.Context,
+	channelID pgtype.UUID,
+	att db.Attachment,
+	data []byte,
+	userID string,
+) {
+	// Look up the room's default analysis_task.
+	task, err := h.Queries.GetDefaultAnalysisTaskForRoom(ctx, channelID)
+	if err != nil {
+		slog.Warn("createDatasetManifest: no analysis_task for room", "channel_id", uuidToString(channelID), "error", err)
+		return
+	}
+
+	// Parse CSV header + row count.
+	lines := strings.Split(string(data), "\n")
+	var columns []string
+	rowCount := 0
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if i == 0 {
+			columns = strings.Split(trimmed, ",")
+			for j := range columns {
+				columns[j] = strings.TrimSpace(columns[j])
+			}
+		} else {
+			rowCount++
+		}
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"dataset_id":  uuidToString(att.ID),
+		"source_type": "csv",
+		"source_name": att.Filename,
+		"row_count":   rowCount,
+		"columns":     columns,
+		"url":         att.Url,
+	})
+	fileRefs, _ := json.Marshal([]string{uuidToString(att.ID)})
+
+	artifact, err := h.Queries.CreateAnalysisArtifact(ctx, db.CreateAnalysisArtifactParams{
+		WorkspaceID:    task.WorkspaceID,
+		AnalysisTaskID: task.ID,
+		Type:           "dataset_manifest",
+		Title:          att.Filename,
+		Status:         "ready",
+		Version:        1,
+		Payload:        payload,
+		FileRefs:       fileRefs,
+		CreatedByType:  "human",
+		CreatedByID:    pgtype.UUID{Bytes: parseUUID(userID).Bytes, Valid: true},
+	})
+	if err != nil {
+		slog.Warn("createDatasetManifest: failed to create artifact", "error", err)
+		return
+	}
+
+	// Audit event.
+	details, _ := json.Marshal(map[string]any{
+		"filename":  att.Filename,
+		"row_count": rowCount,
+		"columns":   len(columns),
+	})
+	_, _ = h.Queries.CreateAnalysisAuditEvent(ctx, db.CreateAnalysisAuditEventParams{
+		WorkspaceID:    task.WorkspaceID,
+		AnalysisTaskID: pgtype.UUID{Bytes: task.ID.Bytes, Valid: true},
+		ArtifactID:     pgtype.UUID{Bytes: artifact.ID.Bytes, Valid: true},
+		ActorType:      "human",
+		ActorID:        pgtype.UUID{Bytes: parseUUID(userID).Bytes, Valid: true},
+		Action:         "artifact.created",
+		TargetType:     pgtype.Text{String: "dataset_manifest", Valid: true},
+		TargetID:       pgtype.UUID{Bytes: artifact.ID.Bytes, Valid: true},
+		Details:        details,
+		RuntimeVersion: pgtype.Text{},
+	})
 }

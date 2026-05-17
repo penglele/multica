@@ -104,6 +104,13 @@ func (h *Handler) ListAnalysisAuditEvents(w http.ResponseWriter, r *http.Request
 // channel any workspace member is allowed to read the analysis state.
 // Private-room scoping lands when private rooms grow real product
 // distinction (P3+).
+//
+// "Has at least one analysis_task" is NOT enforced here — it's an
+// invariant maintained at write-time: migration 095 backfilled every
+// existing channel, and CreateChannel seeds a default task atomically
+// with the channel row. If those invariants ever break, listing
+// returns an empty array (not an error); a future lazy-create path
+// could be added if monitoring shows it's needed.
 func (h *Handler) gateAnalysisRoom(w http.ResponseWriter, r *http.Request) (pgtype.UUID, bool) {
 	if _, authed := requireUserID(w, r); !authed {
 		return pgtype.UUID{}, false
@@ -146,7 +153,7 @@ func parseAnalysisLimit(r *http.Request) int32 {
 // Response shapers
 // ---------------------------------------------------------------------------
 
-func analysisTaskToResponse(t db.AnalysisTask) map[string]any {
+func analysisTaskToResponse(t db.ListAnalysisTasksForRoomRow) map[string]any {
 	resp := map[string]any{
 		"id":                 uuidToString(t.ID),
 		"workspace_id":       uuidToString(t.WorkspaceID),
@@ -163,6 +170,9 @@ func analysisTaskToResponse(t db.AnalysisTask) map[string]any {
 	}
 	if t.SquadID.Valid {
 		resp["squad_id"] = uuidToString(t.SquadID)
+	}
+	if t.SquadName.Valid {
+		resp["squad_name"] = t.SquadName.String
 	}
 	if t.CreatedByID.Valid {
 		resp["created_by_id"] = uuidToString(t.CreatedByID)

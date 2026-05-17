@@ -60,6 +60,11 @@ export function WorkspaceTaskView({ roomId }: WorkspaceTaskViewProps) {
             <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide", stageBadgeClass(t.current_stage))}>
               {stageLabel(t.current_stage)}
             </span>
+            {t.squad_name && (
+              <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-900 dark:bg-purple-950 dark:text-purple-200">
+                🤖 {t.squad_name}
+              </span>
+            )}
             <span className="text-[11px] text-muted-foreground">
               {new Date(t.created_at).toLocaleString()}
             </span>

@@ -4,12 +4,15 @@
 -- when we build the Workspace-level dashboard.
 
 -- name: ListAnalysisTasksForRoom :many
--- All analysis tasks attached to a room, newest-first. The room's
--- "default" task (auto-created on room creation) is included; future
--- per-task UI will let users start additional tasks on the same room.
-SELECT * FROM analysis_task
-WHERE room_id = $1
-ORDER BY created_at DESC
+-- All analysis tasks attached to a room, newest-first. Joins squad to
+-- surface the Agent Team name without a second round-trip.
+SELECT
+  t.*,
+  s.name AS squad_name
+FROM analysis_task t
+LEFT JOIN squad s ON s.id = t.squad_id
+WHERE t.room_id = $1
+ORDER BY t.created_at DESC
 LIMIT $2;
 
 -- name: ListAnalysisArtifactsForRoom :many
@@ -45,6 +48,13 @@ INSERT INTO analysis_task (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
+-- name: CreateAnalysisArtifact :one
+INSERT INTO analysis_artifact (
+    workspace_id, analysis_task_id, type, title, status, version,
+    payload, file_refs, created_by_type, created_by_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING *;
+
 -- name: CreateAnalysisAuditEvent :one
 -- Append-only. The application layer constructs the action key (e.g.
 -- 'task.created') and stuffs whatever context it needs into details.
@@ -56,7 +66,26 @@ INSERT INTO analysis_audit_event (
 RETURNING *;
 
 -- name: CountAnalysisTasksForRoom :one
--- Used by the bind-on-open path: if a pre-existing room ends up with
--- zero tasks (e.g. backfill skipped a row, or the task was deleted),
--- the handler can spawn a fresh task on first read.
 SELECT COUNT(*)::int FROM analysis_task WHERE room_id = $1;
+
+-- name: UpdateAnalysisTask :one
+-- Partial update: only non-null args are applied. Used to bind a squad,
+-- advance stage, set business_question, etc.
+UPDATE analysis_task SET
+    squad_id = COALESCE(sqlc.narg('squad_id'), squad_id),
+    issue_id = COALESCE(sqlc.narg('issue_id'), issue_id),
+    business_question = COALESCE(sqlc.narg('business_question'), business_question),
+    current_stage = COALESCE(sqlc.narg('current_stage'), current_stage),
+    requires_approval = COALESCE(sqlc.narg('requires_approval'), requires_approval),
+    updated_at = now()
+WHERE id = sqlc.arg('id')
+RETURNING *;
+
+-- name: GetDefaultAnalysisTaskForRoom :one
+-- Returns the most-recently-created task for a room. Used by the
+-- audit-event writer when it needs to attach an event to "the room's
+-- current task" without the caller knowing the task id explicitly.
+SELECT * FROM analysis_task
+WHERE room_id = $1
+ORDER BY created_at DESC
+LIMIT 1;

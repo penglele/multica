@@ -1772,7 +1772,51 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 		}
 		// Persist the updated status so page refresh shows correct state.
 		s.persistChannelTargetStatus(ctx, task, channelStatus)
+
+		// P3: write an analysis_audit_event for every channel-task
+		// lifecycle transition so the AUDIT tab shows real agent
+		// activity without waiting for P4 Runtime integration.
+		s.emitAnalysisAuditForChannelTask(ctx, task, channelStatus)
 	}
+}
+
+// emitAnalysisAuditForChannelTask writes an analysis_audit_event for a
+// channel-scoped agent task lifecycle event. It looks up the room's
+// default analysis_task and appends an event with the agent as actor.
+// Best-effort: failures are logged but don't propagate — the channel
+// target_update is the primary delivery path; audit is supplementary.
+func (s *TaskService) emitAnalysisAuditForChannelTask(ctx context.Context, task db.AgentTaskQueue, targetStatus string) {
+	if !task.ChannelID.Valid {
+		return
+	}
+	ch, err := s.Queries.GetChannel(ctx, task.ChannelID)
+	if err != nil {
+		return
+	}
+	at, err := s.Queries.GetDefaultAnalysisTaskForRoom(ctx, task.ChannelID)
+	if err != nil {
+		// Room has no analysis_task — shouldn't happen post-P2 but
+		// don't crash if it does.
+		return
+	}
+	action := "agent_task." + targetStatus // e.g. agent_task.queued, agent_task.running, agent_task.completed
+	details, _ := json.Marshal(map[string]any{
+		"agent_task_queue_id": util.UUIDToString(task.ID),
+		"agent_id":           util.UUIDToString(task.AgentID),
+		"status":             targetStatus,
+	})
+	_, _ = s.Queries.CreateAnalysisAuditEvent(ctx, db.CreateAnalysisAuditEventParams{
+		WorkspaceID:    ch.WorkspaceID,
+		AnalysisTaskID: pgtype.UUID{Bytes: at.ID.Bytes, Valid: true},
+		ArtifactID:     pgtype.UUID{},
+		ActorType:      "agent",
+		ActorID:        pgtype.UUID{Bytes: task.AgentID.Bytes, Valid: true},
+		Action:         action,
+		TargetType:     pgtype.Text{String: "agent_task_queue", Valid: true},
+		TargetID:       pgtype.UUID{Bytes: task.ID.Bytes, Valid: true},
+		Details:        details,
+		RuntimeVersion: pgtype.Text{},
+	})
 }
 
 // mapTaskStatusToTargetStatus translates internal agent_task_queue status

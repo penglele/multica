@@ -20,6 +20,8 @@ export interface AnalysisTask {
   room_id: string;
   /** Squad providing the agent team config, when set. */
   squad_id?: string;
+  /** Resolved squad name from the JOIN. Present when squad_id is set. */
+  squad_name?: string;
   current_stage: AnalysisStage;
   business_question: string;
   requires_approval: boolean;

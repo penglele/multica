@@ -15,14 +15,64 @@ const countAnalysisTasksForRoom = `-- name: CountAnalysisTasksForRoom :one
 SELECT COUNT(*)::int FROM analysis_task WHERE room_id = $1
 `
 
-// Used by the bind-on-open path: if a pre-existing room ends up with
-// zero tasks (e.g. backfill skipped a row, or the task was deleted),
-// the handler can spawn a fresh task on first read.
 func (q *Queries) CountAnalysisTasksForRoom(ctx context.Context, roomID pgtype.UUID) (int32, error) {
 	row := q.db.QueryRow(ctx, countAnalysisTasksForRoom, roomID)
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const createAnalysisArtifact = `-- name: CreateAnalysisArtifact :one
+INSERT INTO analysis_artifact (
+    workspace_id, analysis_task_id, type, title, status, version,
+    payload, file_refs, created_by_type, created_by_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, workspace_id, analysis_task_id, type, title, status, version, payload, file_refs, created_by_type, created_by_id, created_at, updated_at
+`
+
+type CreateAnalysisArtifactParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	AnalysisTaskID pgtype.UUID `json:"analysis_task_id"`
+	Type           string      `json:"type"`
+	Title          string      `json:"title"`
+	Status         string      `json:"status"`
+	Version        int32       `json:"version"`
+	Payload        []byte      `json:"payload"`
+	FileRefs       []byte      `json:"file_refs"`
+	CreatedByType  string      `json:"created_by_type"`
+	CreatedByID    pgtype.UUID `json:"created_by_id"`
+}
+
+func (q *Queries) CreateAnalysisArtifact(ctx context.Context, arg CreateAnalysisArtifactParams) (AnalysisArtifact, error) {
+	row := q.db.QueryRow(ctx, createAnalysisArtifact,
+		arg.WorkspaceID,
+		arg.AnalysisTaskID,
+		arg.Type,
+		arg.Title,
+		arg.Status,
+		arg.Version,
+		arg.Payload,
+		arg.FileRefs,
+		arg.CreatedByType,
+		arg.CreatedByID,
+	)
+	var i AnalysisArtifact
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AnalysisTaskID,
+		&i.Type,
+		&i.Title,
+		&i.Status,
+		&i.Version,
+		&i.Payload,
+		&i.FileRefs,
+		&i.CreatedByType,
+		&i.CreatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const createAnalysisAuditEvent = `-- name: CreateAnalysisAuditEvent :one
@@ -157,6 +207,36 @@ func (q *Queries) GetAnalysisTask(ctx context.Context, id pgtype.UUID) (Analysis
 	return i, err
 }
 
+const getDefaultAnalysisTaskForRoom = `-- name: GetDefaultAnalysisTaskForRoom :one
+SELECT id, workspace_id, issue_id, room_id, squad_id, business_question, current_stage, requires_approval, created_by_type, created_by_id, created_at, updated_at FROM analysis_task
+WHERE room_id = $1
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+// Returns the most-recently-created task for a room. Used by the
+// audit-event writer when it needs to attach an event to "the room's
+// current task" without the caller knowing the task id explicitly.
+func (q *Queries) GetDefaultAnalysisTaskForRoom(ctx context.Context, roomID pgtype.UUID) (AnalysisTask, error) {
+	row := q.db.QueryRow(ctx, getDefaultAnalysisTaskForRoom, roomID)
+	var i AnalysisTask
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.RoomID,
+		&i.SquadID,
+		&i.BusinessQuestion,
+		&i.CurrentStage,
+		&i.RequiresApproval,
+		&i.CreatedByType,
+		&i.CreatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listAnalysisArtifactsForRoom = `-- name: ListAnalysisArtifactsForRoom :many
 SELECT a.id, a.workspace_id, a.analysis_task_id, a.type, a.title, a.status, a.version, a.payload, a.file_refs, a.created_by_type, a.created_by_id, a.created_at, a.updated_at FROM analysis_artifact a
 JOIN analysis_task t ON t.id = a.analysis_task_id
@@ -258,9 +338,13 @@ func (q *Queries) ListAnalysisAuditEventsForRoom(ctx context.Context, arg ListAn
 
 const listAnalysisTasksForRoom = `-- name: ListAnalysisTasksForRoom :many
 
-SELECT id, workspace_id, issue_id, room_id, squad_id, business_question, current_stage, requires_approval, created_by_type, created_by_id, created_at, updated_at FROM analysis_task
-WHERE room_id = $1
-ORDER BY created_at DESC
+SELECT
+  t.id, t.workspace_id, t.issue_id, t.room_id, t.squad_id, t.business_question, t.current_stage, t.requires_approval, t.created_by_type, t.created_by_id, t.created_at, t.updated_at,
+  s.name AS squad_name
+FROM analysis_task t
+LEFT JOIN squad s ON s.id = t.squad_id
+WHERE t.room_id = $1
+ORDER BY t.created_at DESC
 LIMIT $2
 `
 
@@ -269,22 +353,37 @@ type ListAnalysisTasksForRoomParams struct {
 	Limit  int32       `json:"limit"`
 }
 
+type ListAnalysisTasksForRoomRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	IssueID          pgtype.UUID        `json:"issue_id"`
+	RoomID           pgtype.UUID        `json:"room_id"`
+	SquadID          pgtype.UUID        `json:"squad_id"`
+	BusinessQuestion string             `json:"business_question"`
+	CurrentStage     string             `json:"current_stage"`
+	RequiresApproval bool               `json:"requires_approval"`
+	CreatedByType    string             `json:"created_by_type"`
+	CreatedByID      pgtype.UUID        `json:"created_by_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	SquadName        pgtype.Text        `json:"squad_name"`
+}
+
 // BONCML Workspace P2 queries. Scoped per room (channel) for the
 // list endpoints since the Workspace UI renders all three tabs in the
 // context of a single room. Workspace-wide queries can be added later
 // when we build the Workspace-level dashboard.
-// All analysis tasks attached to a room, newest-first. The room's
-// "default" task (auto-created on room creation) is included; future
-// per-task UI will let users start additional tasks on the same room.
-func (q *Queries) ListAnalysisTasksForRoom(ctx context.Context, arg ListAnalysisTasksForRoomParams) ([]AnalysisTask, error) {
+// All analysis tasks attached to a room, newest-first. Joins squad to
+// surface the Agent Team name without a second round-trip.
+func (q *Queries) ListAnalysisTasksForRoom(ctx context.Context, arg ListAnalysisTasksForRoomParams) ([]ListAnalysisTasksForRoomRow, error) {
 	rows, err := q.db.Query(ctx, listAnalysisTasksForRoom, arg.RoomID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AnalysisTask{}
+	items := []ListAnalysisTasksForRoomRow{}
 	for rows.Next() {
-		var i AnalysisTask
+		var i ListAnalysisTasksForRoomRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
@@ -298,6 +397,7 @@ func (q *Queries) ListAnalysisTasksForRoom(ctx context.Context, arg ListAnalysis
 			&i.CreatedByID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SquadName,
 		); err != nil {
 			return nil, err
 		}
@@ -307,4 +407,54 @@ func (q *Queries) ListAnalysisTasksForRoom(ctx context.Context, arg ListAnalysis
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateAnalysisTask = `-- name: UpdateAnalysisTask :one
+UPDATE analysis_task SET
+    squad_id = COALESCE($1, squad_id),
+    issue_id = COALESCE($2, issue_id),
+    business_question = COALESCE($3, business_question),
+    current_stage = COALESCE($4, current_stage),
+    requires_approval = COALESCE($5, requires_approval),
+    updated_at = now()
+WHERE id = $6
+RETURNING id, workspace_id, issue_id, room_id, squad_id, business_question, current_stage, requires_approval, created_by_type, created_by_id, created_at, updated_at
+`
+
+type UpdateAnalysisTaskParams struct {
+	SquadID          pgtype.UUID `json:"squad_id"`
+	IssueID          pgtype.UUID `json:"issue_id"`
+	BusinessQuestion pgtype.Text `json:"business_question"`
+	CurrentStage     pgtype.Text `json:"current_stage"`
+	RequiresApproval pgtype.Bool `json:"requires_approval"`
+	ID               pgtype.UUID `json:"id"`
+}
+
+// Partial update: only non-null args are applied. Used to bind a squad,
+// advance stage, set business_question, etc.
+func (q *Queries) UpdateAnalysisTask(ctx context.Context, arg UpdateAnalysisTaskParams) (AnalysisTask, error) {
+	row := q.db.QueryRow(ctx, updateAnalysisTask,
+		arg.SquadID,
+		arg.IssueID,
+		arg.BusinessQuestion,
+		arg.CurrentStage,
+		arg.RequiresApproval,
+		arg.ID,
+	)
+	var i AnalysisTask
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.RoomID,
+		&i.SquadID,
+		&i.BusinessQuestion,
+		&i.CurrentStage,
+		&i.RequiresApproval,
+		&i.CreatedByType,
+		&i.CreatedByID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
