@@ -16,7 +16,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ChevronRight, ChevronDown, RotateCw, Loader2, Copy, X } from "lucide-react";
+import { ChevronRight, ChevronDown, RotateCw, Loader2, Copy, X, FileText } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
@@ -287,6 +287,77 @@ function MessageFeed({
 // MessageRow
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// HTML Report detection + download card. When Report Agent outputs a
+// ```html code block, we strip it from the markdown render and show a
+// download card instead. The user clicks to download the HTML file.
+// ---------------------------------------------------------------------------
+
+function hasHtmlReport(content: string): boolean {
+  return content.includes("```html");
+}
+
+function stripHtmlCodeBlock(content: string): string {
+  // Remove the ```html...``` block so Markdown doesn't render it as code
+  return content.replace(/```html[\s\S]*?```/g, "").trim();
+}
+
+function extractHtml(content: string): string | null {
+  const match = content.match(/```html\s*\n([\s\S]*?)```/);
+  return match?.[1]?.trim() ?? null;
+}
+
+function HtmlReportCard({ content }: { content: string }) {
+  const html = extractHtml(content);
+  if (!html) return null;
+
+  const handleDownload = () => {
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "analysis_report.html";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handlePreview = () => {
+    const w = window.open("", "_blank");
+    if (w) {
+      w.document.write(html);
+      w.document.close();
+    }
+  };
+
+  return (
+    <div className="mt-2 flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+      <div className="flex size-8 items-center justify-center rounded-md bg-brand/10 text-brand">
+        <FileText className="size-4" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-medium">分析报告</div>
+        <div className="text-[10px] text-muted-foreground">HTML 格式 · 可下载</div>
+      </div>
+      <button
+        onClick={handlePreview}
+        className="rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+      >
+        预览
+      </button>
+      <button
+        onClick={handleDownload}
+        className="rounded bg-brand px-2 py-1 text-[11px] text-white hover:bg-brand/90 transition-colors"
+      >
+        下载
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MessageRow
+// ---------------------------------------------------------------------------
+
 function MessageRow({
   msg,
   currentUserId,
@@ -355,7 +426,10 @@ function MessageRow({
           )}
         </div>
         <div className="text-sm break-words">
-          <Markdown>{msg.content}</Markdown>
+          <Markdown>{stripHtmlCodeBlock(msg.content)}</Markdown>
+          {hasHtmlReport(msg.content) && (
+            <HtmlReportCard content={msg.content} />
+          )}
         </div>
         {isFailed && msg.error_message && (
           <p className="mt-0.5 text-[11px] text-destructive">{msg.error_message}</p>
