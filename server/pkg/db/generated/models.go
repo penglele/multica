@@ -163,16 +163,18 @@ type AutopilotTrigger struct {
 }
 
 type Channel struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	Name          string             `json:"name"`
-	Description   pgtype.Text        `json:"description"`
-	Type          string             `json:"type"`
-	CreatedBy     pgtype.UUID        `json:"created_by"`
-	AutoReply     bool               `json:"auto_reply"`
-	MaxAgentTurns int32              `json:"max_agent_turns"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	Name              string             `json:"name"`
+	Description       pgtype.Text        `json:"description"`
+	Type              string             `json:"type"`
+	CreatedBy         pgtype.UUID        `json:"created_by"`
+	AutoReply         bool               `json:"auto_reply"`
+	MaxAgentTurns     int32              `json:"max_agent_turns"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	AutoReplyStrategy string             `json:"auto_reply_strategy"`
+	DefaultTargetID   pgtype.UUID        `json:"default_target_id"`
 }
 
 type ChannelMember struct {

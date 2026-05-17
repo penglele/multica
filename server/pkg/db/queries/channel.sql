@@ -27,6 +27,8 @@ SET name = COALESCE(sqlc.narg('name'), name),
     description = COALESCE(sqlc.narg('description'), description),
     auto_reply = COALESCE(sqlc.narg('auto_reply'), auto_reply),
     max_agent_turns = COALESCE(sqlc.narg('max_agent_turns'), max_agent_turns),
+    auto_reply_strategy = COALESCE(sqlc.narg('auto_reply_strategy'), auto_reply_strategy),
+    default_target_id = COALESCE(sqlc.narg('default_target_id'), default_target_id),
     updated_at = now()
 WHERE id = sqlc.arg('id')
 RETURNING *;

@@ -6,16 +6,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strconv"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -288,24 +285,16 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 // Channel Messages
 // ---------------------------------------------------------------------------
 
-// ChannelMessageTarget represents one agent (or future kind) that's been
-// selected to handle a channel message. Returned in the send response so
-// the user immediately sees who their message went to.
-type ChannelMessageTarget struct {
-	Kind   string `json:"kind"`   // "agent" (squads coming later)
-	ID     string `json:"id"`     // agent UUID
-	Name   string `json:"name"`   // display name for UI
-	TaskID string `json:"task_id,omitempty"` // populated once enqueued
-	Status string `json:"status"` // "queued" | "running" | "completed" | "failed" | "cancelled"
-}
+// ChannelMessageTarget is re-exported from the service package so existing
+// handler-side helpers (broadcastChannelTargetStatus, channelMessageToResponse)
+// keep working unchanged. Resolution and enqueueing logic now lives in
+// service/channel_targets.go (B2).
+type ChannelMessageTarget = service.ChannelMessageTarget
 
 // SendChannelMessageTargetSpec is the structured target a client sends in
-// the request when trigger_mode="manual". Only kind and id are required —
-// the server resolves name and validates membership.
-type SendChannelMessageTargetSpec struct {
-	Kind string `json:"kind"` // "agent"
-	ID   string `json:"id"`
-}
+// the request when trigger_mode="manual". Aliased to the service type so
+// the JSON shape stays identical.
+type SendChannelMessageTargetSpec = service.ChannelTargetSpec
 
 type sendChannelMessageRequest struct {
 	Content        string  `json:"content"`
@@ -324,7 +313,6 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	wsID := ctxWorkspaceID(r.Context())
 	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channelId")
 	if !ok {
 		return
@@ -401,10 +389,15 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// B1: Resolve targets — structured request fields take precedence over
-	// the old @mention/auto_reply fallback. resolveChannelTargets reads
-	// req.TriggerMode and req.Targets when present; falls back otherwise.
-	targets := h.resolveChannelTargets(r.Context(), channelID, msg, req.TriggerMode, req.Targets)
+	// B2: Resolve targets via the service-layer function. Structured
+	// trigger_mode + targets take precedence; legacy @mention/auto_reply
+	// is the fallback for older clients. See service/channel_targets.go.
+	targets := service.ResolveChannelTargets(r.Context(), h.Queries, service.ResolveChannelTargetsInput{
+		ChannelID:   channelID,
+		Message:     msg,
+		TriggerMode: req.TriggerMode,
+		Targets:     req.Targets,
+	})
 
 	// Persist targets on the message so they survive page refresh.
 	if len(targets) > 0 {
@@ -427,7 +420,13 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	// and can watch the status flip via WS events.
 	if len(targets) > 0 {
 		ctx := context.Background()
-		go h.enqueueChannelTargets(ctx, wsID, channelID, msg, targets)
+		channelIDStr := uuidToString(channelID)
+		messageIDStr := uuidToString(msg.ID)
+		go h.TaskService.EnqueueChannelTargets(ctx, channelID, msg, targets, func(targetID string) {
+			// On enqueue failure, broadcast and persist a `failed` status
+			// for that specific target so the UI doesn't hang on `排队中`.
+			h.broadcastChannelTargetStatus(channelIDStr, messageIDStr, "", targetID, "failed")
+		})
 	}
 
 	writeJSON(w, http.StatusCreated, resp)
@@ -521,282 +520,6 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// ---------------------------------------------------------------------------
-// Agent trigger logic (Phase 4)
-// ---------------------------------------------------------------------------
-
-func parseMentionedNames(content string, candidates []string) []string {
-	if content == "" || len(candidates) == 0 {
-		return nil
-	}
-
-	sorted := append([]string(nil), candidates...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return utf8.RuneCountInString(sorted[i]) > utf8.RuneCountInString(sorted[j])
-	})
-
-	lowerContent := strings.ToLower(content)
-	seen := make(map[string]bool, len(sorted))
-	names := make([]string, 0, len(sorted))
-
-	for i := 0; i < len(lowerContent); {
-		r, size := utf8.DecodeRuneInString(lowerContent[i:])
-		if r != '@' {
-			i += size
-			continue
-		}
-
-		rest := lowerContent[i+size:]
-		matched := ""
-		for _, candidate := range sorted {
-			lowerCandidate := strings.ToLower(candidate)
-			if !strings.HasPrefix(rest, lowerCandidate) {
-				continue
-			}
-			if !isMentionBoundary(rest[len(lowerCandidate):]) {
-				continue
-			}
-			matched = candidate
-			break
-		}
-		if matched == "" {
-			i += size
-			continue
-		}
-
-		key := strings.ToLower(matched)
-		if !seen[key] {
-			seen[key] = true
-			names = append(names, matched)
-		}
-		i += size + len(strings.ToLower(matched))
-	}
-
-	return names
-}
-
-func isMentionBoundary(rest string) bool {
-	if rest == "" {
-		return true
-	}
-	r, _ := utf8.DecodeRuneInString(rest)
-	return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
-}
-
-// channelAgentRow is a slim view of an agent — used internally during target
-// resolution so we don't pass full db.Agent rows around.
-type channelAgentRow struct {
-	id   pgtype.UUID
-	name string
-}
-
-// resolveChannelTargets decides which agents should respond to a message.
-// Returns a list of ChannelMessageTarget with status="queued" — these are
-// the agents that WILL be enqueued. Loop prevention and channel state are
-// checked here, so an empty result means "no one responds" (not an error).
-//
-// B1 priority order:
-//
-//  1. If the request body specified `trigger_mode`, use it as the source of
-//     truth (`none` → no targets, `manual` → request `targets`, `auto` →
-//     all agent members).
-//  2. Otherwise (older clients or unset), fall back to the B0 implicit
-//     behaviour: `@name` parse + channel.auto_reply flag.
-//
-// `triggerMode` and `requestedTargets` come straight from the request body.
-// They are nil/empty for legacy clients.
-func (h *Handler) resolveChannelTargets(
-	ctx context.Context,
-	channelID pgtype.UUID,
-	msg db.ChannelMessage,
-	triggerMode *string,
-	requestedTargets []SendChannelMessageTargetSpec,
-) []ChannelMessageTarget {
-	ch, err := h.Queries.GetChannel(ctx, channelID)
-	if err != nil {
-		return nil
-	}
-
-	// Loop prevention: cap agent turns per thread.
-	var threadRoot pgtype.UUID
-	if msg.ThreadParentID.Valid {
-		threadRoot = msg.ThreadParentID
-	} else {
-		threadRoot = msg.ID
-	}
-	agentTurns, _ := h.Queries.CountAgentTurnsInThread(ctx, threadRoot)
-	maxTurns := int32(20)
-	if ch.MaxAgentTurns > 0 {
-		maxTurns = ch.MaxAgentTurns
-	}
-	if agentTurns >= maxTurns {
-		slog.Info("channel target resolve: max agent turns reached",
-			"channel_id", uuidToString(channelID),
-			"turns", agentTurns,
-			"max", maxTurns,
-		)
-		return nil
-	}
-
-	// Load agent members of this channel — needed for both paths to
-	// validate target IDs and look up display names.
-	agentMemberIDs, err := h.Queries.ListChannelAgentMembers(ctx, channelID)
-	if err != nil || len(agentMemberIDs) == 0 {
-		return nil
-	}
-
-	agentsByName := make(map[string]channelAgentRow, len(agentMemberIDs))
-	idToAgent := make(map[string]channelAgentRow, len(agentMemberIDs))
-	candidateNames := make([]string, 0, len(agentMemberIDs))
-	memberIDStrs := make(map[string]bool, len(agentMemberIDs))
-	for _, memberID := range agentMemberIDs {
-		agent, err := h.Queries.GetAgent(ctx, memberID)
-		if err != nil || agent.ArchivedAt.Valid || !agent.RuntimeID.Valid {
-			continue
-		}
-		row := channelAgentRow{id: agent.ID, name: agent.Name}
-		agentsByName[strings.ToLower(agent.Name)] = row
-		idStr := uuidToString(agent.ID)
-		idToAgent[idStr] = row
-		memberIDStrs[idStr] = true
-		candidateNames = append(candidateNames, agent.Name)
-	}
-
-	// Path 1: structured trigger_mode
-	if triggerMode != nil {
-		mode := strings.ToLower(strings.TrimSpace(*triggerMode))
-		switch mode {
-		case "none":
-			return nil
-		case "manual":
-			return resolveManualTargets(requestedTargets, idToAgent, memberIDStrs)
-		case "auto":
-			return resolveAutoTargets(idToAgent, agentMemberIDs)
-		default:
-			// Unknown mode — be permissive and fall through to the legacy path
-			// rather than 400-ing. This keeps older clients working when a
-			// future mode name leaks into the protocol.
-			slog.Warn("unknown channel trigger_mode, falling back to legacy resolution",
-				"channel_id", uuidToString(channelID),
-				"trigger_mode", mode,
-			)
-		}
-	}
-
-	// Path 2: legacy fallback — @mention first, then channel auto_reply.
-	if mentionedNames := parseMentionedNames(msg.Content, candidateNames); len(mentionedNames) > 0 {
-		picked := make([]ChannelMessageTarget, 0, len(mentionedNames))
-		for _, name := range mentionedNames {
-			if row, ok := agentsByName[strings.ToLower(name)]; ok {
-				picked = append(picked, ChannelMessageTarget{
-					Kind: "agent", ID: uuidToString(row.id), Name: row.name, Status: "queued",
-				})
-			}
-		}
-		return picked
-	}
-	if msg.SenderType == "human" && ch.AutoReply {
-		return resolveAutoTargets(idToAgent, agentMemberIDs)
-	}
-	return nil
-}
-
-// resolveManualTargets validates that each requested target is a current
-// agent member of the channel and returns the matching list. Targets that
-// don't match are silently dropped (the request is not rejected — partial
-// resolution is more useful than a hard fail).
-func resolveManualTargets(
-	requested []SendChannelMessageTargetSpec,
-	idToAgent map[string]channelAgentRow,
-	memberIDStrs map[string]bool,
-) []ChannelMessageTarget {
-	out := make([]ChannelMessageTarget, 0, len(requested))
-	seen := make(map[string]bool, len(requested))
-	for _, t := range requested {
-		if t.Kind != "agent" {
-			continue // squads/other kinds not supported yet
-		}
-		if !memberIDStrs[t.ID] {
-			continue // not a current channel member
-		}
-		if seen[t.ID] {
-			continue
-		}
-		row, ok := idToAgent[t.ID]
-		if !ok {
-			continue
-		}
-		seen[t.ID] = true
-		out = append(out, ChannelMessageTarget{
-			Kind:   "agent",
-			ID:     t.ID,
-			Name:   row.name,
-			Status: "queued",
-		})
-	}
-	return out
-}
-
-// resolveAutoTargets fans out to every agent member of the channel.
-func resolveAutoTargets(
-	idToAgent map[string]channelAgentRow,
-	agentMemberIDs []pgtype.UUID,
-) []ChannelMessageTarget {
-	out := make([]ChannelMessageTarget, 0, len(agentMemberIDs))
-	for _, memberID := range agentMemberIDs {
-		row, ok := idToAgent[uuidToString(memberID)]
-		if !ok {
-			continue // archived / no runtime
-		}
-		out = append(out, ChannelMessageTarget{
-			Kind: "agent", ID: uuidToString(row.id), Name: row.name, Status: "queued",
-		})
-	}
-	return out
-}
-
-// enqueueChannelTargets actually inserts agent_task_queue rows for the
-// resolved targets and notifies the daemon. Runs asynchronously so the
-// HTTP handler can return immediately with the resolved targets.
-func (h *Handler) enqueueChannelTargets(ctx context.Context, wsID string, channelID pgtype.UUID, msg db.ChannelMessage, targets []ChannelMessageTarget) {
-	for _, t := range targets {
-		if t.Kind != "agent" {
-			continue
-		}
-		agentUUID, err := pgtypeUUIDFromString(t.ID)
-		if err != nil {
-			continue
-		}
-		agent, err := h.Queries.GetAgent(ctx, agentUUID)
-		if err != nil || agent.ArchivedAt.Valid || !agent.RuntimeID.Valid {
-			continue
-		}
-		task, err := h.Queries.CreateChannelTask(ctx, db.CreateChannelTaskParams{
-			AgentID:          agentUUID,
-			RuntimeID:        agent.RuntimeID,
-			Priority:         2,
-			ChannelID:        channelID,
-			ChannelMessageID: msg.ID,
-		})
-		if err != nil {
-			slog.Error("channel task enqueue failed",
-				"channel_id", uuidToString(channelID),
-				"agent_id", t.ID,
-				"error", err,
-			)
-			// Broadcast failure so the UI doesn't show "排队中" forever.
-			h.broadcastChannelTargetStatus(uuidToString(channelID), uuidToString(msg.ID), "", t.ID, "failed")
-			continue
-		}
-		slog.Info("channel task enqueued",
-			"task_id", uuidToString(task.ID),
-			"channel_id", uuidToString(channelID),
-			"agent_id", t.ID,
-		)
-		h.TaskService.NotifyTaskEnqueued(ctx, task)
-	}
 }
 
 func pgtypeUUIDFromString(s string) (pgtype.UUID, error) {

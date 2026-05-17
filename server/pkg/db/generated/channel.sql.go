@@ -51,7 +51,7 @@ func (q *Queries) CountAgentTurnsInThread(ctx context.Context, id pgtype.UUID) (
 const createChannel = `-- name: CreateChannel :one
 INSERT INTO channel (workspace_id, name, description, type, created_by)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, workspace_id, name, description, type, created_by, auto_reply, max_agent_turns, created_at, updated_at
+RETURNING id, workspace_id, name, description, type, created_by, auto_reply, max_agent_turns, created_at, updated_at, auto_reply_strategy, default_target_id
 `
 
 type CreateChannelParams struct {
@@ -82,6 +82,8 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		&i.MaxAgentTurns,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutoReplyStrategy,
+		&i.DefaultTargetID,
 	)
 	return i, err
 }
@@ -197,7 +199,7 @@ func (q *Queries) DeleteChannel(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getChannel = `-- name: GetChannel :one
-SELECT id, workspace_id, name, description, type, created_by, auto_reply, max_agent_turns, created_at, updated_at FROM channel WHERE id = $1
+SELECT id, workspace_id, name, description, type, created_by, auto_reply, max_agent_turns, created_at, updated_at, auto_reply_strategy, default_target_id FROM channel WHERE id = $1
 `
 
 func (q *Queries) GetChannel(ctx context.Context, id pgtype.UUID) (Channel, error) {
@@ -214,12 +216,14 @@ func (q *Queries) GetChannel(ctx context.Context, id pgtype.UUID) (Channel, erro
 		&i.MaxAgentTurns,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutoReplyStrategy,
+		&i.DefaultTargetID,
 	)
 	return i, err
 }
 
 const getChannelInWorkspace = `-- name: GetChannelInWorkspace :one
-SELECT id, workspace_id, name, description, type, created_by, auto_reply, max_agent_turns, created_at, updated_at FROM channel WHERE id = $1 AND workspace_id = $2
+SELECT id, workspace_id, name, description, type, created_by, auto_reply, max_agent_turns, created_at, updated_at, auto_reply_strategy, default_target_id FROM channel WHERE id = $1 AND workspace_id = $2
 `
 
 type GetChannelInWorkspaceParams struct {
@@ -241,6 +245,8 @@ func (q *Queries) GetChannelInWorkspace(ctx context.Context, arg GetChannelInWor
 		&i.MaxAgentTurns,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutoReplyStrategy,
+		&i.DefaultTargetID,
 	)
 	return i, err
 }
@@ -491,7 +497,7 @@ func (q *Queries) ListChannelMessagesAfterSeq(ctx context.Context, arg ListChann
 }
 
 const listChannels = `-- name: ListChannels :many
-SELECT c.id, c.workspace_id, c.name, c.description, c.type, c.created_by, c.auto_reply, c.max_agent_turns, c.created_at, c.updated_at FROM channel c
+SELECT c.id, c.workspace_id, c.name, c.description, c.type, c.created_by, c.auto_reply, c.max_agent_turns, c.created_at, c.updated_at, c.auto_reply_strategy, c.default_target_id FROM channel c
 WHERE c.workspace_id = $1
   AND (
     c.type = 'public'
@@ -528,6 +534,8 @@ func (q *Queries) ListChannels(ctx context.Context, arg ListChannelsParams) ([]C
 			&i.MaxAgentTurns,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AutoReplyStrategy,
+			&i.DefaultTargetID,
 		); err != nil {
 			return nil, err
 		}
@@ -598,17 +606,21 @@ SET name = COALESCE($1, name),
     description = COALESCE($2, description),
     auto_reply = COALESCE($3, auto_reply),
     max_agent_turns = COALESCE($4, max_agent_turns),
+    auto_reply_strategy = COALESCE($5, auto_reply_strategy),
+    default_target_id = COALESCE($6, default_target_id),
     updated_at = now()
-WHERE id = $5
-RETURNING id, workspace_id, name, description, type, created_by, auto_reply, max_agent_turns, created_at, updated_at
+WHERE id = $7
+RETURNING id, workspace_id, name, description, type, created_by, auto_reply, max_agent_turns, created_at, updated_at, auto_reply_strategy, default_target_id
 `
 
 type UpdateChannelParams struct {
-	Name          pgtype.Text `json:"name"`
-	Description   pgtype.Text `json:"description"`
-	AutoReply     pgtype.Bool `json:"auto_reply"`
-	MaxAgentTurns pgtype.Int4 `json:"max_agent_turns"`
-	ID            pgtype.UUID `json:"id"`
+	Name              pgtype.Text `json:"name"`
+	Description       pgtype.Text `json:"description"`
+	AutoReply         pgtype.Bool `json:"auto_reply"`
+	MaxAgentTurns     pgtype.Int4 `json:"max_agent_turns"`
+	AutoReplyStrategy pgtype.Text `json:"auto_reply_strategy"`
+	DefaultTargetID   pgtype.UUID `json:"default_target_id"`
+	ID                pgtype.UUID `json:"id"`
 }
 
 func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (Channel, error) {
@@ -617,6 +629,8 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		arg.Description,
 		arg.AutoReply,
 		arg.MaxAgentTurns,
+		arg.AutoReplyStrategy,
+		arg.DefaultTargetID,
 		arg.ID,
 	)
 	var i Channel
@@ -631,6 +645,8 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.MaxAgentTurns,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutoReplyStrategy,
+		&i.DefaultTargetID,
 	)
 	return i, err
 }
