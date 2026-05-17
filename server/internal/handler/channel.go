@@ -340,6 +340,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		SenderType:     "human",
 		Content:        req.Content,
 		ThreadParentID: threadParentID,
+		Targets:        []byte("[]"),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to send message")

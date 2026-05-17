@@ -1102,9 +1102,8 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 			SenderID:   task.AgentID,
 			SenderType: "agent",
 			Content:    redact.Text(body),
-			// Don't set ThreadParentID — agent replies are top-level messages,
-			// not thread replies. The ChannelMessageID is only used for context.
-			TaskID: task.ID,
+			TaskID:     task.ID,
+			Targets:    []byte("[]"),
 		})
 			if err != nil {
 				slog.Error("failed to save channel agent reply", "task_id", util.UUIDToString(task.ID), "error", err)
@@ -1679,6 +1678,12 @@ func (s *TaskService) broadcastTaskDispatch(ctx context.Context, task db.AgentTa
 	if task.ChatSessionID.Valid {
 		payload["chat_session_id"] = util.UUIDToString(task.ChatSessionID)
 	}
+	if task.ChannelID.Valid {
+		payload["channel_id"] = util.UUIDToString(task.ChannelID)
+		if task.ChannelMessageID.Valid {
+			payload["channel_message_id"] = util.UUIDToString(task.ChannelMessageID)
+		}
+	}
 
 	workspaceID := s.ResolveTaskWorkspaceID(ctx, task)
 	if workspaceID == "" {
@@ -1691,6 +1696,29 @@ func (s *TaskService) broadcastTaskDispatch(ctx context.Context, task db.AgentTa
 		ActorID:     "",
 		Payload:     payload,
 	})
+
+	// For channel tasks, broadcast channel:target_update with status=running
+	// and persist it. Without this the channel UI stays stuck at "排队中"
+	// until the task completes (because broadcastTaskEvent is the only
+	// place that emits channel:target_update, and dispatch never calls it).
+	if task.ChannelID.Valid && task.ChannelMessageID.Valid {
+		channelPayload := map[string]any{
+			"channel_id":         util.UUIDToString(task.ChannelID),
+			"channel_message_id": util.UUIDToString(task.ChannelMessageID),
+			"task_id":            util.UUIDToString(task.ID),
+			"target_kind":        "agent",
+			"target_id":          util.UUIDToString(task.AgentID),
+			"status":             "running",
+		}
+		data, err := json.Marshal(map[string]any{
+			"type":    "channel:target_update",
+			"payload": channelPayload,
+		})
+		if err == nil {
+			s.Hub.BroadcastToScope(realtime.ScopeChannel, util.UUIDToString(task.ChannelID), data)
+		}
+		s.persistChannelTargetStatus(ctx, task, "running")
+	}
 }
 
 func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, task db.AgentTaskQueue) {
