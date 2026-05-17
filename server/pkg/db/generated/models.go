@@ -99,6 +99,52 @@ type AgentTaskQueue struct {
 	ChannelMessageID  pgtype.UUID        `json:"channel_message_id"`
 }
 
+type AnalysisArtifact struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	AnalysisTaskID pgtype.UUID        `json:"analysis_task_id"`
+	Type           string             `json:"type"`
+	Title          string             `json:"title"`
+	Status         string             `json:"status"`
+	Version        int32              `json:"version"`
+	Payload        []byte             `json:"payload"`
+	FileRefs       []byte             `json:"file_refs"`
+	CreatedByType  string             `json:"created_by_type"`
+	CreatedByID    pgtype.UUID        `json:"created_by_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AnalysisAuditEvent struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	AnalysisTaskID pgtype.UUID        `json:"analysis_task_id"`
+	ArtifactID     pgtype.UUID        `json:"artifact_id"`
+	ActorType      string             `json:"actor_type"`
+	ActorID        pgtype.UUID        `json:"actor_id"`
+	Action         string             `json:"action"`
+	TargetType     pgtype.Text        `json:"target_type"`
+	TargetID       pgtype.UUID        `json:"target_id"`
+	Details        []byte             `json:"details"`
+	RuntimeVersion pgtype.Text        `json:"runtime_version"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type AnalysisTask struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	IssueID          pgtype.UUID        `json:"issue_id"`
+	RoomID           pgtype.UUID        `json:"room_id"`
+	SquadID          pgtype.UUID        `json:"squad_id"`
+	BusinessQuestion string             `json:"business_question"`
+	CurrentStage     string             `json:"current_stage"`
+	RequiresApproval bool               `json:"requires_approval"`
+	CreatedByType    string             `json:"created_by_type"`
+	CreatedByID      pgtype.UUID        `json:"created_by_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Attachment struct {
 	ID            pgtype.UUID        `json:"id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`

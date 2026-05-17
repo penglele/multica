@@ -1,10 +1,13 @@
 "use client";
 
-// W1 + P1: AUDIT tab body. Fetches the real (currently empty) audit
-// event stream so the timeline swap in P2 is a one-spot change.
+// W1 + P2: AUDIT tab body. Reads /api/channels/<roomId>/analysis-audit-events
+// from the real `analysis_audit_event` table. Renders a flat
+// reverse-chronological list — the prettier per-task / per-actor
+// timeline UI lands in W5.
 
 import { useQuery } from "@tanstack/react-query";
 import { History, Loader2 } from "lucide-react";
+import { cn } from "@multica/ui/lib/utils";
 import { analysisAuditEventsOptions } from "@multica/core/analysis";
 import { WorkspacePlaceholder } from "./workspace-placeholder";
 
@@ -45,8 +48,46 @@ export function WorkspaceAuditView({ roomId }: WorkspaceAuditViewProps) {
   }
 
   return (
-    <div className="flex flex-1 flex-col p-4 text-xs text-muted-foreground">
-      共 {events.length} 条审计事件（P2 待实现时间线渲染）。
+    <div className="flex flex-1 flex-col overflow-y-auto p-4">
+      <ol className="relative ml-2 border-l border-border">
+        {events.map((e) => (
+          <li key={e.id} className="relative pl-4 pb-3 last:pb-0">
+            <span
+              className={cn(
+                "absolute -left-[5px] top-1.5 size-2 rounded-full ring-2 ring-background",
+                actorDotClass(e.actor_type),
+              )}
+            />
+            <div className="flex items-baseline gap-2 text-[11px]">
+              <span className="rounded bg-muted px-1.5 py-px font-mono text-[10px]">
+                {e.action}
+              </span>
+              <span className="text-muted-foreground">
+                {new Date(e.created_at).toLocaleString()}
+              </span>
+              {e.runtime_version && (
+                <span className="text-muted-foreground/70">runtime {e.runtime_version}</span>
+              )}
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              by {e.actor_type}
+              {e.target_type && ` · ${e.target_type}`}
+            </div>
+          </li>
+        ))}
+      </ol>
     </div>
   );
+}
+
+function actorDotClass(actor: string): string {
+  switch (actor) {
+    case "human":
+      return "bg-brand";
+    case "agent":
+      return "bg-purple-500";
+    case "system":
+    default:
+      return "bg-muted-foreground";
+  }
 }

@@ -70,6 +70,50 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		Role:       "owner",
 	})
 
+	// BONCML Workspace P2: every new room is born with one default
+	// analysis_task in the 'created' stage. Future "start a new
+	// analysis" actions can spawn additional tasks on the same room;
+	// for now this gives the TASKS / ARTIFACTS / AUDIT tabs a real
+	// task to attach to instead of greeting the user with empty
+	// state in their freshly-created room. Failures are logged but
+	// don't block channel creation — the bind-on-open backstop in
+	// gateAnalysisRoom is the safety net.
+	if task, taskErr := h.Queries.CreateAnalysisTask(r.Context(), db.CreateAnalysisTaskParams{
+		WorkspaceID:      wsUUID,
+		RoomID:           ch.ID,
+		IssueID:          pgtype.UUID{},
+		SquadID:          pgtype.UUID{},
+		BusinessQuestion: "",
+		CurrentStage:     "created",
+		RequiresApproval: false,
+		CreatedByType:    "human",
+		CreatedByID:      pgtype.UUID{Bytes: parseUUID(userID).Bytes, Valid: true},
+	}); taskErr != nil {
+		slog.Warn("failed to seed analysis_task on channel create",
+			"channel_id", uuidToString(ch.ID), "error", taskErr)
+	} else {
+		// Audit the creation so the AUDIT tab has its first entry. We
+		// stuff just enough context into details for a future timeline
+		// renderer to show "<room name> initialized" without a join.
+		details, _ := json.Marshal(map[string]any{
+			"source":      "channel_create",
+			"room_name":   ch.Name,
+			"room_type":   ch.Type,
+		})
+		_, _ = h.Queries.CreateAnalysisAuditEvent(r.Context(), db.CreateAnalysisAuditEventParams{
+			WorkspaceID:    wsUUID,
+			AnalysisTaskID: pgtype.UUID{Bytes: task.ID.Bytes, Valid: true},
+			ArtifactID:     pgtype.UUID{},
+			ActorType:      "human",
+			ActorID:        pgtype.UUID{Bytes: parseUUID(userID).Bytes, Valid: true},
+			Action:         "task.created",
+			TargetType:     pgtype.Text{String: "channel", Valid: true},
+			TargetID:       pgtype.UUID{Bytes: ch.ID.Bytes, Valid: true},
+			Details:        details,
+			RuntimeVersion: pgtype.Text{},
+		})
+	}
+
 	h.broadcastChannelEvent(wsID, protocol.EventChannelCreated, map[string]any{"channel": channelToResponse(ch)})
 	writeJSON(w, http.StatusCreated, channelToResponse(ch))
 }
