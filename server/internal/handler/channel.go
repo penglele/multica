@@ -128,10 +128,12 @@ func (h *Handler) GetChannel(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateChannelRequest struct {
-	Name          *string `json:"name"`
-	Description   *string `json:"description"`
-	AutoReply     *bool   `json:"auto_reply"`
-	MaxAgentTurns *int32  `json:"max_agent_turns"`
+	Name              *string `json:"name"`
+	Description       *string `json:"description"`
+	AutoReply         *bool   `json:"auto_reply"`
+	MaxAgentTurns     *int32  `json:"max_agent_turns"`
+	AutoReplyStrategy *string `json:"auto_reply_strategy"` // "all_agents" | "default_agent"
+	DefaultTargetID   *string `json:"default_target_id"`
 }
 
 func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
@@ -161,12 +163,32 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate enum values before sending to DB.
+	if req.AutoReplyStrategy != nil {
+		v := *req.AutoReplyStrategy
+		if v != "all_agents" && v != "default_agent" {
+			writeError(w, http.StatusBadRequest, "auto_reply_strategy must be 'all_agents' or 'default_agent'")
+			return
+		}
+	}
+	var defaultTargetUUID pgtype.UUID
+	if req.DefaultTargetID != nil && *req.DefaultTargetID != "" {
+		parsed, err := pgtypeUUIDFromString(*req.DefaultTargetID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "default_target_id is not a valid UUID")
+			return
+		}
+		defaultTargetUUID = parsed
+	}
+
 	ch, err := h.Queries.UpdateChannel(r.Context(), db.UpdateChannelParams{
-		ID:            channelID,
-		Name:          pgtype.Text{String: strDeref(req.Name), Valid: req.Name != nil},
-		Description:   pgtype.Text{String: strDeref(req.Description), Valid: req.Description != nil},
-		AutoReply:     pgtype.Bool{Bool: boolDeref(req.AutoReply), Valid: req.AutoReply != nil},
-		MaxAgentTurns: pgtype.Int4{Int32: int32Deref(req.MaxAgentTurns), Valid: req.MaxAgentTurns != nil},
+		ID:                channelID,
+		Name:              pgtype.Text{String: strDeref(req.Name), Valid: req.Name != nil},
+		Description:       pgtype.Text{String: strDeref(req.Description), Valid: req.Description != nil},
+		AutoReply:         pgtype.Bool{Bool: boolDeref(req.AutoReply), Valid: req.AutoReply != nil},
+		MaxAgentTurns:     pgtype.Int4{Int32: int32Deref(req.MaxAgentTurns), Valid: req.MaxAgentTurns != nil},
+		AutoReplyStrategy: pgtype.Text{String: strDeref(req.AutoReplyStrategy), Valid: req.AutoReplyStrategy != nil},
+		DefaultTargetID:   defaultTargetUUID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update channel")
@@ -606,18 +628,23 @@ func marshalEvent(eventType string, payload any) ([]byte, error) {
 // ---------------------------------------------------------------------------
 
 func channelToResponse(ch db.Channel) map[string]any {
-	return map[string]any{
-		"id":              uuidToString(ch.ID),
-		"workspace_id":    uuidToString(ch.WorkspaceID),
-		"name":            ch.Name,
-		"description":     ch.Description.String,
-		"type":            ch.Type,
-		"auto_reply":      ch.AutoReply,
-		"max_agent_turns": ch.MaxAgentTurns,
-		"created_by":      uuidToString(ch.CreatedBy),
-		"created_at":      ch.CreatedAt.Time,
-		"updated_at":      ch.UpdatedAt.Time,
+	resp := map[string]any{
+		"id":                  uuidToString(ch.ID),
+		"workspace_id":        uuidToString(ch.WorkspaceID),
+		"name":                ch.Name,
+		"description":         ch.Description.String,
+		"type":                ch.Type,
+		"auto_reply":          ch.AutoReply,
+		"max_agent_turns":     ch.MaxAgentTurns,
+		"auto_reply_strategy": ch.AutoReplyStrategy,
+		"created_by":          uuidToString(ch.CreatedBy),
+		"created_at":          ch.CreatedAt.Time,
+		"updated_at":          ch.UpdatedAt.Time,
 	}
+	if ch.DefaultTargetID.Valid {
+		resp["default_target_id"] = uuidToString(ch.DefaultTargetID)
+	}
+	return resp
 }
 
 func channelMessageToResponse(m db.ChannelMessage) map[string]any {
