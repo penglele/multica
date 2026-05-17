@@ -297,7 +297,13 @@ func isMentionBoundary(rest string) bool {
 		return false
 	}
 	switch r {
-	case ' ', '\t', '\n', '\r', ',', '.', ':', '!', '?', ';', '。', '，', '、', '；', '！', '？', '：':
+	case ' ', '\t', '\n', '\r', ',', '.', ':', '!', '?', ';',
+		// Markdown bracket close — supports [@Name](mention://link) syntax,
+		// which the old parser handled and the test guards against
+		// regressing.
+		']',
+		// Common CJK punctuation.
+		'。', '，', '、', '；', '！', '？', '：':
 		return true
 	}
 	return false

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -242,5 +243,97 @@ func TestResolveChannelTargets_ArchivedAgentExcluded(t *testing.T) {
 	})
 	if len(got) != 1 || got[0].Name != "千问" {
 		t.Fatalf("archived agent must be filtered out, got %+v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseMentionsFromContent — ported from the old handler-side tests.
+// We exercise the function directly (rather than via the public Resolve path)
+// so each unicode/markdown/longest-match case stays tightly scoped.
+// ---------------------------------------------------------------------------
+
+// makeRosterFromNames builds a channelAgentRoster with one agent per name.
+// Agent ids are derived from the index so byID lookups are stable across runs.
+func makeRosterFromNames(names []string) channelAgentRoster {
+	r := channelAgentRoster{
+		byID:    make(map[string]channelAgentRow, len(names)),
+		byName:  make(map[string]channelAgentRow, len(names)),
+		ordered: make([]channelAgentRow, 0, len(names)),
+	}
+	for i, name := range names {
+		// 32-char hex string seeded with i so each agent has a distinct id.
+		hex := ""
+		for len(hex) < 32 {
+			hex += string(rune('a' + (i % 26)))
+		}
+		id := uuidFromHex(hex[:32])
+		row := channelAgentRow{id: id, name: name}
+		r.ordered = append(r.ordered, row)
+		r.byName[lower(name)] = row
+	}
+	return r
+}
+
+// lower is a tiny helper to avoid importing strings in test code where we
+// only need it once per fixture.
+func lower(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			r = r + 32
+		}
+		out = append(out, r)
+	}
+	return string(out)
+}
+
+func mentionedNames(targets []ChannelMessageTarget) []string {
+	out := make([]string, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, t.Name)
+	}
+	return out
+}
+
+func TestParseMentionsFromContent_SupportsUnicodeAndSpaces(t *testing.T) {
+	roster := makeRosterFromNames([]string{"开发代理", "Agent Alpha"})
+	got := mentionedNames(parseMentionsFromContent(
+		"请 @开发代理 看下这个问题，再让 @Agent Alpha 跟进。",
+		roster,
+	))
+	want := []string{"开发代理", "Agent Alpha"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+}
+
+func TestParseMentionsFromContent_SupportsMarkdownMentionSyntax(t *testing.T) {
+	roster := makeRosterFromNames([]string{"Reviewer Bot"})
+	got := mentionedNames(parseMentionsFromContent(
+		"交给 [@Reviewer Bot](mention://agent/123) 继续处理。",
+		roster,
+	))
+	want := []string{"Reviewer Bot"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+}
+
+func TestParseMentionsFromContent_PrefersLongestAgentName(t *testing.T) {
+	// Order in roster shouldn't matter — the parser must prefer the longest
+	// match regardless of insertion order. We test both orderings.
+	for _, order := range [][]string{
+		{"Agent", "Agent Alpha"},
+		{"Agent Alpha", "Agent"},
+	} {
+		roster := makeRosterFromNames(order)
+		got := mentionedNames(parseMentionsFromContent(
+			"@Agent Alpha please take it from here.",
+			roster,
+		))
+		want := []string{"Agent Alpha"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("order=%v: expected %v, got %v", order, want, got)
+		}
 	}
 }
