@@ -45,10 +45,18 @@ export function useSendChannelMessage() {
     mutationFn: ({ channelId, content, threadParentId }: { channelId: string; content: string; threadParentId?: string }) =>
       api.sendChannelMessage(channelId, content, threadParentId),
     onSuccess: (msg: ChannelMessage) => {
-      // Optimistically append to messages cache.
-      qc.setQueryData<ChannelMessage[]>(channelKeys.messages(msg.channel_id), (old = []) => [...old, msg]);
+      // Append to cache, deduping on id — the WS channel:message event will
+      // also fire (we broadcast on send), so without this guard we'd insert
+      // the same message twice.
+      qc.setQueryData<ChannelMessage[]>(channelKeys.messages(msg.channel_id), (old = []) => {
+        if (old.some((m) => m.id === msg.id)) return old;
+        return [...old, msg];
+      });
       if (msg.thread_parent_id) {
-        qc.setQueryData<ChannelMessage[]>(channelKeys.thread(msg.thread_parent_id), (old = []) => [...old, msg]);
+        qc.setQueryData<ChannelMessage[]>(channelKeys.thread(msg.thread_parent_id), (old = []) => {
+          if (old.some((m) => m.id === msg.id)) return old;
+          return [...old, msg];
+        });
       }
     },
   });
